@@ -1,0 +1,24 @@
+FROM rust:1.75-slim-bullseye AS builder
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY rust-toolchain.toml rust-toolchain.toml
+COPY secrets-core/Cargo.toml secrets-core/Cargo.toml
+COPY secrets-broker/Cargo.toml secrets-broker/Cargo.toml
+COPY secrets-wit/Cargo.toml secrets-wit/Cargo.toml
+COPY secrets-sdk/Cargo.toml secrets-sdk/Cargo.toml
+COPY providers providers
+
+COPY . .
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+RUN cargo build --release -p secrets-broker
+
+FROM gcr.io/distroless/cc-debian12
+ENV RUST_LOG=info
+COPY --from=builder /app/target/release/secrets-broker /usr/local/bin/secrets-broker
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/secrets-broker"]

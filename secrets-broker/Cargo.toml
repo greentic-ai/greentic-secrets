@@ -1,0 +1,44 @@
+[package]
+name = "secrets-broker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = "0.44.2"
+axum = { version = "0.8.6", features = ["macros", "json"] }
+base64 = "0.22.1"
+futures = "0.3"
+hyper = { version = "1", features = ["full"] }
+jsonwebtoken = { version = "10.1.0", default-features = false, features = ["use_pem", "rust_crypto"] }
+opentelemetry = { version = "0.31.0" }
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+ring = { version = "0.17.14", features = ["std"] }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower = "0.5.2"
+tower-http = { version = "0.6.6", features = ["trace"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+secrets-core = { path = "../secrets-core" }
+secrets-provider-dev = { path = "../providers/dev" }
+secrets-provider-aws-sm = { path = "../providers/aws-sm", optional = true }
+secrets-provider-gcp-sm = { path = "../providers/gcp-sm", optional = true }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+ring = "0.17"
+tempfile = "3"
+serial_test = "3.2.0"
+
+[features]
+default = []
+aws-sm = ["secrets-provider-aws-sm"]
+gcp-sm = ["secrets-provider-gcp-sm"]

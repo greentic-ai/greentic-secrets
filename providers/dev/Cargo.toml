@@ -1,0 +1,16 @@
+[package]
+name = "secrets-provider-dev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+base64 = "0.21"
+fs2 = "0.4"
+parking_lot = "0.12"
+secrets-core = { path = "../../secrets-core" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = "0.10"
+tracing = { workspace = true }

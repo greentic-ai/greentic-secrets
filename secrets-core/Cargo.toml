@@ -1,0 +1,28 @@
+[package]
+name = "secrets-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = []
+schema = ["schemars"]
+xchacha = ["chacha20poly1305"]
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true, optional = true }
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = { version = "0.8", features = ["std"] }
+lru = "0.12"
+
+[dependencies.chacha20poly1305]
+version = "0.10"
+optional = true
+default-features = false
+features = ["std"]

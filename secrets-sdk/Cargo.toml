@@ -1,0 +1,14 @@
+[package]
+name = "secrets-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+secrets-core = { path = "../secrets-core" }

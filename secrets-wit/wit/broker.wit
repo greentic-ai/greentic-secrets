@@ -1,0 +1,6 @@
+package greentic:secrets@0.1.0;
+
+world broker {
+    /// Placeholder interface for broker-hosted secret providers.
+    interface providers {}
+}
