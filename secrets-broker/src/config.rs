@@ -50,14 +50,22 @@ async fn dev_backend() -> Result<BackendComponents> {
 
 #[cfg(feature = "aws-sm")]
 async fn aws_backend() -> Result<BackendComponents> {
-    secrets_provider_aws_sm::build_backend()
+    let components = secrets_provider_aws_sm::build_backend()
         .await
-        .context("failed to initialize aws secrets backend")
+        .context("failed to initialize aws secrets backend")?;
+    Ok(BackendComponents {
+        backend: components.backend,
+        key_provider: components.key_provider,
+    })
 }
 
 #[cfg(feature = "gcp-sm")]
 async fn gcp_backend() -> Result<BackendComponents> {
-    secrets_provider_gcp_sm::build_backend()
+    let components = secrets_provider_gcp_sm::build_backend()
         .await
-        .context("failed to initialize gcp secrets backend")
+        .context("failed to initialize gcp secrets backend")?;
+    Ok(BackendComponents {
+        backend: components.backend,
+        key_provider: components.key_provider,
+    })
 }

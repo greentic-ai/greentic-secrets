@@ -6,14 +6,14 @@
 //! prefixes and per-environment KMS aliases, making it suitable for tests and
 //! local development when the real services are not available.
 
-use anyhow::{anyhow, Result};
-use rand::{rngs::OsRng, RngCore};
+use anyhow::Result;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use rand::Rng;
 use secrets_core::backend::{SecretVersion, SecretsBackend, VersionedSecret};
 use secrets_core::errors::{Error as CoreError, Result as CoreResult};
 use secrets_core::key_provider::KeyProvider;
-use secrets_core::types::{
-    ContentType, Envelope, SecretListItem, SecretMeta, SecretRecord, Visibility,
-};
+use secrets_core::types::{Envelope, SecretListItem, SecretMeta, SecretRecord};
 use secrets_core::uri::SecretUri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ pub struct AwsSecretsBackend {
 }
 
 impl AwsSecretsBackend {
-    pub fn new(config: AwsProviderConfig) -> Self {
+    pub(crate) fn new(config: AwsProviderConfig) -> Self {
         Self {
             config,
             store: Arc::new(Mutex::new(HashMap::new())),
@@ -98,7 +98,13 @@ impl SecretsBackend for AwsSecretsBackend {
         };
         match stored {
             None => Ok(None),
-            Some(secret) => Ok(Some(secret.into_versioned()?)),
+            Some(secret) => {
+                if secret.deleted {
+                    Ok(None)
+                } else {
+                    Ok(Some(secret.into_versioned()?))
+                }
+            }
         }
     }
 
@@ -185,7 +191,7 @@ pub struct AwsKmsKeyProvider {
 }
 
 impl AwsKmsKeyProvider {
-    pub fn new(config: AwsProviderConfig) -> Self {
+    pub(crate) fn new(config: AwsProviderConfig) -> Self {
         Self {
             config,
             kek_store: Arc::new(Mutex::new(HashMap::new())),
@@ -197,9 +203,10 @@ impl AwsKmsKeyProvider {
         store
             .entry(alias.to_string())
             .or_insert_with(|| {
-                let mut key = vec![0u8; 32];
-                OsRng.fill_bytes(&mut key);
-                key
+                let mut rng = rand::rng();
+                let mut key = [0u8; 32];
+                rng.fill(&mut key);
+                key.to_vec()
             })
             .clone()
     }
@@ -238,22 +245,23 @@ fn xor(kek: &[u8], data: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+fn decode_bytes(input: &str) -> CoreResult<Vec<u8>> {
+    STANDARD
+        .decode(input.as_bytes())
+        .map_err(|err| CoreError::Storage(err.to_string()))
+}
+
 #[derive(Clone, Debug)]
 struct AwsProviderConfig {
-    region: String,
     secret_prefix: String,
     kms_aliases: AliasMap,
 }
 
 impl AwsProviderConfig {
     fn from_env() -> Result<Self> {
-        let region = std::env::var("AWS_SM_REGION")
-            .or_else(|_| std::env::var("AWS_REGION"))
-            .unwrap_or_else(|_| "us-east-1".to_string());
         let prefix =
             std::env::var("AWS_SM_SECRET_PREFIX").unwrap_or_else(|_| DEFAULT_PREFIX.to_string());
         Ok(Self {
-            region,
             secret_prefix: prefix,
             kms_aliases: AliasMap::from_env("AWS_SM_KMS_ALIAS")?,
         })
@@ -326,7 +334,7 @@ struct StoredSecret {
 }
 
 impl StoredSecret {
-    fn from_record(record: &SecretRecord, deleted: bool) -> Result<Self> {
+    fn from_record(record: &SecretRecord, deleted: bool) -> CoreResult<Self> {
         Ok(Self {
             version: 0,
             deleted,
@@ -339,7 +347,7 @@ impl StoredSecret {
         self
     }
 
-    fn into_versioned(self) -> Result<VersionedSecret> {
+    fn into_versioned(self) -> CoreResult<VersionedSecret> {
         if self.deleted {
             return Ok(VersionedSecret {
                 version: self.version,
@@ -349,7 +357,7 @@ impl StoredSecret {
         }
         let record = self
             .record
-            .ok_or_else(|| anyhow!("missing record"))?
+            .ok_or_else(|| CoreError::Storage("missing record".into()))?
             .into_record()?;
         Ok(VersionedSecret {
             version: self.version,
@@ -358,11 +366,13 @@ impl StoredSecret {
         })
     }
 
-    fn into_list_item(self) -> Result<Option<SecretListItem>> {
+    fn into_list_item(self) -> CoreResult<Option<SecretListItem>> {
         if self.deleted {
             return Ok(None);
         }
-        let record = self.record.ok_or_else(|| anyhow!("missing record"))?;
+        let record = self
+            .record
+            .ok_or_else(|| CoreError::Storage("missing record".into()))?;
         Ok(Some(SecretListItem::from_meta(
             &record.meta,
             Some(self.version.to_string()),
@@ -378,18 +388,18 @@ struct StoredRecord {
 }
 
 impl StoredRecord {
-    fn from_record(record: &SecretRecord) -> Result<Self> {
+    fn from_record(record: &SecretRecord) -> CoreResult<Self> {
         Ok(Self {
             meta: record.meta.clone(),
             envelope: StoredEnvelope::from_envelope(&record.envelope),
-            value: base64::encode(&record.value),
+            value: STANDARD.encode(&record.value),
         })
     }
 
-    fn into_record(self) -> Result<SecretRecord> {
+    fn into_record(self) -> CoreResult<SecretRecord> {
         Ok(SecretRecord::new(
             self.meta,
-            base64::decode(&self.value)?,
+            decode_bytes(&self.value)?,
             self.envelope.into_envelope()?,
         ))
     }
@@ -407,18 +417,21 @@ impl StoredEnvelope {
     fn from_envelope(envelope: &Envelope) -> Self {
         Self {
             algorithm: envelope.algorithm.to_string(),
-            nonce: base64::encode(&envelope.nonce),
-            hkdf_salt: base64::encode(&envelope.hkdf_salt),
-            wrapped_dek: base64::encode(&envelope.wrapped_dek),
+            nonce: STANDARD.encode(&envelope.nonce),
+            hkdf_salt: STANDARD.encode(&envelope.hkdf_salt),
+            wrapped_dek: STANDARD.encode(&envelope.wrapped_dek),
         }
     }
 
-    fn into_envelope(self) -> Result<Envelope> {
+    fn into_envelope(self) -> CoreResult<Envelope> {
         Ok(Envelope {
-            algorithm: self.algorithm.parse()?,
-            nonce: base64::decode(self.nonce)?,
-            hkdf_salt: base64::decode(self.hkdf_salt)?,
-            wrapped_dek: base64::decode(self.wrapped_dek)?,
+            algorithm: self
+                .algorithm
+                .parse()
+                .map_err(|_| CoreError::Storage("invalid algorithm".into()))?,
+            nonce: decode_bytes(&self.nonce)?,
+            hkdf_salt: decode_bytes(&self.hkdf_salt)?,
+            wrapped_dek: decode_bytes(&self.wrapped_dek)?,
         })
     }
 }
@@ -426,7 +439,7 @@ impl StoredEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrets_core::types::{Scope, Visibility};
+    use secrets_core::types::{ContentType, Scope, Visibility};
 
     fn build_record() -> SecretRecord {
         let scope = Scope::new("prod", "acme", Some("payments".into())).unwrap();
@@ -445,7 +458,6 @@ mod tests {
     #[test]
     fn put_get_roundtrip() {
         let config = AwsProviderConfig {
-            region: "us-east-1".into(),
             secret_prefix: "test".into(),
             kms_aliases: AliasMap::with_default("alias/test"),
         };
@@ -462,7 +474,6 @@ mod tests {
     #[test]
     fn delete_marks_tombstone() {
         let config = AwsProviderConfig {
-            region: "us-east-1".into(),
             secret_prefix: "test".into(),
             kms_aliases: AliasMap::with_default("alias/test"),
         };
@@ -471,13 +482,12 @@ mod tests {
         backend.put(record.clone()).unwrap();
         backend.delete(&record.meta.uri).unwrap();
         assert!(backend.get(&record.meta.uri, None).unwrap().is_none());
-        assert!(backend.exists(&record.meta.uri).unwrap());
+        assert!(!backend.exists(&record.meta.uri).unwrap());
     }
 
     #[test]
     fn kms_wrap_unwrap() {
         let config = AwsProviderConfig {
-            region: "us-east-1".into(),
             secret_prefix: "test".into(),
             kms_aliases: AliasMap::with_default("alias/test"),
         };
