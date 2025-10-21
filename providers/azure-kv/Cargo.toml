@@ -7,5 +7,8 @@ publish = false
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = "0.22.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 secrets-core = { path = "../../secrets-core" }
-tracing = { workspace = true }
+rsa = "0.9.8"

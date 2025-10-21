@@ -1,6 +1,7 @@
 use crate::errors::{Error, Result};
 use crate::uri::SecretUri;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -228,6 +229,8 @@ pub struct SecretMeta {
     pub content_type: ContentType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tags: BTreeMap<String, String>,
 }
 
 impl SecretMeta {
@@ -238,12 +241,33 @@ impl SecretMeta {
             visibility,
             content_type,
             description: None,
+            tags: BTreeMap::new(),
         }
     }
 
     /// Borrow the scope embedded in the underlying URI.
     pub fn scope(&self) -> &Scope {
         self.uri.scope()
+    }
+
+    /// Borrow tags associated with this secret.
+    pub fn tags(&self) -> &BTreeMap<String, String> {
+        &self.tags
+    }
+
+    /// Mutable access to the tag map.
+    pub fn tags_mut(&mut self) -> &mut BTreeMap<String, String> {
+        &mut self.tags
+    }
+
+    /// Set a tag value on the metadata.
+    pub fn set_tag(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.tags.insert(key.into(), value.into());
+    }
+
+    /// Remove a tag from the metadata.
+    pub fn remove_tag(&mut self, key: &str) -> Option<String> {
+        self.tags.remove(key)
     }
 }
 
@@ -328,6 +352,7 @@ mod tests {
 
         let mut meta = SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Opaque);
         meta.description = Some("database password".into());
+        meta.set_tag("region", "east");
         let envelope = Envelope {
             algorithm: EncryptionAlgorithm::Aes256Gcm,
             nonce: vec![0; EncryptionAlgorithm::Aes256Gcm.nonce_len()],
@@ -352,5 +377,6 @@ mod tests {
             record_back.envelope.algorithm,
             EncryptionAlgorithm::Aes256Gcm
         );
+        assert_eq!(meta.tags.get("region"), Some(&"east".to_string()));
     }
 }

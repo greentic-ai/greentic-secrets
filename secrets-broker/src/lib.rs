@@ -5,8 +5,10 @@ pub mod http;
 pub mod models;
 pub mod nats;
 pub mod path;
+pub mod rotate;
 pub mod state;
 pub mod telemetry;
+pub mod wit;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

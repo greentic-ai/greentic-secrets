@@ -2,17 +2,18 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::IntoResponse;
-use axum::{routing::get, Extension, Json, Router};
+use axum::{routing::get, routing::post, Extension, Json, Router};
 use serde::Deserialize;
 use tracing::Instrument;
 
 use crate::auth::{self, Action, AuthContext};
 use crate::error::{attach_correlation, AppError, AppErrorKind};
 use crate::models::{
-    DeleteResponse, ListItem, ListSecretsResponse, PutSecretRequest, SecretResponse, VersionInfo,
-    VersionsResponse,
+    DeleteResponse, ListItem, ListSecretsResponse, PutSecretRequest, RotateRequest, SecretResponse,
+    VersionInfo, VersionsResponse,
 };
 use crate::path::{build_scope, build_uri, split_name_version, split_prefix};
+use crate::rotate;
 use crate::state::AppState;
 use crate::telemetry::{correlation_layer, request_span, CorrelationId};
 use secrets_core::types::SecretMeta;
@@ -62,6 +63,14 @@ fn api_routes() -> Router<AppState> {
             "/v1/{env}/{tenant}/{team}/_list",
             get(list_secrets_with_team),
         )
+        .route(
+            "/v1/{env}/{tenant}/_rotate/{category}",
+            post(rotate_no_team),
+        )
+        .route(
+            "/v1/{env}/{tenant}/{team}/_rotate/{category}",
+            post(rotate_with_team),
+        )
 }
 
 async fn health_check() -> impl IntoResponse {
@@ -110,6 +119,7 @@ async fn put_secret_with_team(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn put_secret(
     state: AppState,
     correlation: CorrelationId,
@@ -145,6 +155,78 @@ async fn put_secret(
     .map_err(|err: AppError| attach_correlation(err, &correlation))
 }
 
+async fn rotate_no_team(
+    State(state): State<AppState>,
+    Extension(correlation): Extension<CorrelationId>,
+    Extension(auth): Extension<AuthContext>,
+    Path((env, tenant, category)): Path<(String, String, String)>,
+    maybe_request: Option<Json<RotateRequest>>,
+) -> Result<impl IntoResponse, AppError> {
+    let request = maybe_request.map(|Json(value)| value).unwrap_or_default();
+    rotate_category(
+        state,
+        correlation,
+        auth,
+        env,
+        tenant,
+        None,
+        category,
+        request,
+    )
+    .await
+}
+
+async fn rotate_with_team(
+    State(state): State<AppState>,
+    Extension(correlation): Extension<CorrelationId>,
+    Extension(auth): Extension<AuthContext>,
+    Path((env, tenant, team, category)): Path<(String, String, String, String)>,
+    maybe_request: Option<Json<RotateRequest>>,
+) -> Result<impl IntoResponse, AppError> {
+    let request = maybe_request.map(|Json(value)| value).unwrap_or_default();
+    rotate_category(
+        state,
+        correlation,
+        auth,
+        env,
+        tenant,
+        Some(team),
+        category,
+        request,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn rotate_category(
+    state: AppState,
+    correlation: CorrelationId,
+    auth: AuthContext,
+    env: String,
+    tenant: String,
+    team: Option<String>,
+    category: String,
+    request: RotateRequest,
+) -> Result<impl IntoResponse, AppError> {
+    let correlation_clone = correlation.clone();
+    let span = request_span("http.rotate", &correlation.0);
+    async move {
+        state
+            .authorizer
+            .authorize(&auth, Action::Rotate, &tenant, team.as_deref())?;
+        let scope = build_scope(&env, &tenant, team.as_deref())?;
+        let job_id = request
+            .job_id
+            .unwrap_or_else(|| correlation_clone.0.clone());
+        let response =
+            rotate::execute_rotation(state.clone(), scope, &category, job_id, &auth.actor).await?;
+        Ok((StatusCode::ACCEPTED, Json(response)))
+    }
+    .instrument(span)
+    .await
+    .map_err(|err: AppError| attach_correlation(err, &correlation))
+}
+
 async fn get_secret_no_team(
     State(state): State<AppState>,
     Extension(correlation): Extension<CorrelationId>,
@@ -173,6 +255,7 @@ async fn get_secret_with_team(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_secret(
     state: AppState,
     correlation: CorrelationId,
@@ -294,6 +377,7 @@ async fn list_versions_with_team(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn list_versions(
     state: AppState,
     correlation: CorrelationId,
@@ -354,6 +438,7 @@ async fn delete_secret_with_team(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn delete_secret(
     state: AppState,
     correlation: CorrelationId,

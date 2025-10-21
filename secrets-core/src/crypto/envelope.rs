@@ -7,7 +7,6 @@ use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
-use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::Sha256;
 use std::env;
@@ -205,8 +204,7 @@ fn decrypt_with_algorithm(
             #[cfg(not(feature = "xchacha"))]
             {
                 Err(DecryptError::Crypto(format!(
-                    "algorithm {} unavailable",
-                    algorithm
+                    "algorithm {algorithm} unavailable"
                 )))
             }
         }
@@ -227,7 +225,8 @@ fn generate_dek() -> Vec<u8> {
 
 fn random_bytes(len: usize) -> Vec<u8> {
     let mut buffer = vec![0u8; len];
-    OsRng.fill_bytes(&mut buffer);
+    let mut rng = rand::rng();
+    rng.fill_bytes(&mut buffer);
     buffer
 }
 

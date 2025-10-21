@@ -6,17 +6,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppErrorKind};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+type PutSecretPayload = (
+    Vec<u8>,
+    ValueEncoding,
+    ContentType,
+    Visibility,
+    Option<String>,
+);
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ValueEncoding {
     Utf8,
+    #[default]
     Base64,
-}
-
-impl Default for ValueEncoding {
-    fn default() -> Self {
-        ValueEncoding::Base64
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,18 +34,7 @@ pub struct PutSecretRequest {
 }
 
 impl PutSecretRequest {
-    pub fn into_bytes(
-        self,
-    ) -> Result<
-        (
-            Vec<u8>,
-            ValueEncoding,
-            ContentType,
-            Visibility,
-            Option<String>,
-        ),
-        AppError,
-    > {
+    pub fn into_bytes(self) -> Result<PutSecretPayload, AppError> {
         let encoding = self.encoding;
         let content_type = self.content_type;
         let visibility = self.visibility;
@@ -135,6 +127,20 @@ pub struct DeleteResponse {
     pub deleted: bool,
 }
 
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct RotateRequest {
+    #[serde(default)]
+    pub job_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RotateResponse {
+    pub job_id: String,
+    pub category: String,
+    pub rotated: usize,
+    pub skipped: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PutCommand {
     pub category: String,
@@ -165,6 +171,14 @@ pub struct ListCommand {
 pub struct DeleteCommand {
     pub category: String,
     pub name: String,
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RotateCommand {
+    #[serde(default)]
+    pub job_id: Option<String>,
     #[serde(default)]
     pub token: Option<String>,
 }

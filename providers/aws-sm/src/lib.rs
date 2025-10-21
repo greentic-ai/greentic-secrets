@@ -312,7 +312,7 @@ impl AliasMap {
         self.per_tenant
             .get(&(env.to_lowercase(), tenant.to_lowercase()))
             .or_else(|| self.per_env.get(&env.to_lowercase()))
-            .or_else(|| self.default.as_ref())
+            .or(self.default.as_ref())
             .map(String::as_str)
     }
 

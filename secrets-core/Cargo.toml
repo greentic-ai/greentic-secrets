@@ -3,10 +3,22 @@ name = "secrets-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+description = "Embedded, pluggable, multi-cloud secrets for Greentic runtimes (no HTTP on hot path)"
+repository = "https://github.com/greentic-ai/greentic"
+readme = "README.md"
+categories = ["config", "authentication", "cryptography"]
+keywords = ["secrets", "aws", "kubernetes", "gcp", "azure", "greentic"]
 
 [features]
-default = []
+default = ["env", "file"]
+env = []
+file = []
+k8s = ["dep:kube", "dep:k8s-openapi"]
+aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "imds"]
+gcp = ["dep:google-cloud-secretmanager"]
+azure = ["dep:azure_identity", "dep:azure_security_keyvault_secrets"]
+imds = ["dep:reqwest"]
+nats = ["dep:async-nats", "dep:futures", "tokio"]
 schema = ["schemars"]
 xchacha = ["chacha20poly1305"]
 
@@ -15,14 +27,32 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true, optional = true }
-aes-gcm = "0.10"
+aes-gcm = "0.10.3"
 hkdf = "0.12"
 sha2 = "0.10"
-rand = { version = "0.8", features = ["std"] }
-lru = "0.12"
+rand = { version = "0.9.2", features = ["std"] }
+lru = "0.16.2"
+tokio = { workspace = true, optional = true }
+async-nats = { version = "0.44.2", optional = true }
+futures = { version = "0.3", optional = true }
+reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls"], optional = true }
+kube = { path = "../stubs/kube", optional = true, default-features = false }
+k8s-openapi = { path = "../stubs/k8s-openapi", optional = true, default-features = false }
+aws-config = { path = "../stubs/aws-config", optional = true, default-features = false }
+aws-sdk-secretsmanager = { path = "../stubs/aws-sdk-secretsmanager", optional = true, default-features = false }
+google-cloud-secretmanager = { path = "../stubs/google-cloud-secretmanager", optional = true, default-features = false }
+azure_identity = { path = "../stubs/azure_identity", optional = true, default-features = false }
+azure_security_keyvault_secrets = { path = "../stubs/azure_security_keyvault_secrets", optional = true, default-features = false }
 
 [dependencies.chacha20poly1305]
 version = "0.10"
 optional = true
 default-features = false
 features = ["std"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tempfile = "3"
+anyhow = "1"
+once_cell = "1"
+wit-bindgen = "0.46.0"

@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn acl_positive_cases() {
-        let guard = PolicyGuard::default();
+        let guard = PolicyGuard;
 
         let team_scope = Scope::new("prod", "acme", Some("payments".into())).unwrap();
         let team_meta = build_meta(team_scope.clone(), Visibility::Team);
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn acl_negative_cases() {
-        let guard = PolicyGuard::default();
+        let guard = PolicyGuard;
         let payments_scope = Scope::new("prod", "acme", Some("payments".into())).unwrap();
         let billing_scope = Scope::new("prod", "acme", Some("billing".into())).unwrap();
 

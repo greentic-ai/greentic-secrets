@@ -21,7 +21,7 @@ const ENV_KEY: &str = "SECRETS_BACKEND_STATE";
 const MASTER_KEY_ENV: &str = "GREENTIC_DEV_MASTER_KEY";
 
 /// Simple development key provider that uses deterministic material to wrap DEKs.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct DevKeyProvider {
     master_key: [u8; 32],
 }
@@ -41,14 +41,6 @@ impl DevKeyProvider {
         let mut master_key = [0u8; 32];
         master_key.copy_from_slice(&digest);
         Self { master_key }
-    }
-}
-
-impl Default for DevKeyProvider {
-    fn default() -> Self {
-        Self {
-            master_key: [0u8; 32],
-        }
     }
 }
 
@@ -126,6 +118,7 @@ impl Persistence {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)
             .map_err(|err| Error::Storage(err.to_string()))?;
 
@@ -225,6 +218,12 @@ struct PersistedSecret {
 pub struct DevBackend {
     state: Arc<RwLock<State>>,
     persistence: Option<Persistence>,
+}
+
+impl Default for DevBackend {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DevBackend {

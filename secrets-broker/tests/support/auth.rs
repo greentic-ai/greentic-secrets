@@ -44,6 +44,7 @@ impl TestAuth {
         }
     }
 
+    #[allow(dead_code)]
     pub fn token(&self, roles: &[&str], tenant: &str, team: Option<&str>) -> String {
         self.token_with_ttl("svc@greentic.dev", roles, tenant, team, 3600)
     }

@@ -7,13 +7,14 @@ use serde_json::json;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
-use crate::auth::{extract_bearer_token, Action};
+use crate::auth::{extract_bearer_token, Action, AuthContext};
 use crate::error::{AppError, AppErrorKind};
 use crate::models::{
     DeleteCommand, DeleteResponse, ErrorResponse, GetCommand, ListCommand, ListItem,
-    ListSecretsResponse, PutCommand, SecretResponse,
+    ListSecretsResponse, PutCommand, RotateCommand, RotateResponse, SecretResponse,
 };
 use crate::path::{build_scope, build_uri, split_prefix};
+use crate::rotate;
 use crate::state::AppState;
 use crate::telemetry::{request_span, CorrelationId, CORRELATION_ID_HEADER};
 use secrets_core::types::SecretMeta;
@@ -26,6 +27,7 @@ pub async fn run(client: Client, state: AppState) -> anyhow::Result<()> {
     let get = client.subscribe("secrets.get.req.>").await?;
     let list = client.subscribe("secrets.list.req.>").await?;
     let del = client.subscribe("secrets.del.req.>").await?;
+    let rotate = client.subscribe("secrets.rotate.req.>").await?;
 
     let tasks = vec![
         spawn_handler(client.clone(), "nats.put", put, state.clone(), handle_put),
@@ -37,7 +39,14 @@ pub async fn run(client: Client, state: AppState) -> anyhow::Result<()> {
             state.clone(),
             handle_list,
         ),
-        spawn_handler(client, "nats.delete", del, state, handle_delete),
+        spawn_handler(
+            client.clone(),
+            "nats.delete",
+            del,
+            state.clone(),
+            handle_delete,
+        ),
+        spawn_handler(client, "nats.rotate", rotate, state, handle_rotate),
     ];
 
     futures::future::try_join_all(tasks).await?;
@@ -187,6 +196,35 @@ fn handle_delete(
     })
 }
 
+fn handle_rotate(
+    client: Arc<Client>,
+    state: AppState,
+    subject: SubjectParts,
+    message: Message,
+    correlation: CorrelationId,
+) -> HandlerFuture {
+    Box::pin(async move {
+        let payload = parse_rotate_command(&message.payload)?;
+        let header_token = token_from_headers(&message);
+        let payload_token = payload.token.clone();
+        let token = header_token.as_deref().or(payload_token.as_deref());
+        let auth = state
+            .authorizer
+            .authenticate_nats(message.subject.as_str(), token)
+            .await?;
+        state.authorizer.authorize(
+            &auth,
+            Action::Rotate,
+            &subject.tenant,
+            subject.team.as_deref(),
+        )?;
+        let category = extract_category(message.subject.as_str())?;
+        let response =
+            process_rotate(state, &subject, &category, payload, &auth, &correlation).await?;
+        respond(client.as_ref(), &message, &response, &correlation).await
+    })
+}
+
 fn extract_correlation(message: &Message) -> CorrelationId {
     if let Some(headers) = &message.headers {
         if let Some(value) = headers.get(CORRELATION_ID_HEADER) {
@@ -194,6 +232,16 @@ fn extract_correlation(message: &Message) -> CorrelationId {
         }
     }
     CorrelationId(Uuid::new_v4().to_string())
+}
+
+fn extract_category(subject: &str) -> Result<String, AppError> {
+    let segments: Vec<&str> = subject.split('.').collect();
+    if segments.len() < 7 {
+        return Err(AppError::new(AppErrorKind::BadRequest(
+            "rotate subject missing category".into(),
+        )));
+    }
+    Ok(segments[6].to_string())
 }
 
 async fn send_bad_subject(
@@ -327,6 +375,15 @@ fn parse_delete_command(bytes: &[u8]) -> Result<DeleteCommand, AppError> {
     })
 }
 
+fn parse_rotate_command(bytes: &[u8]) -> Result<RotateCommand, AppError> {
+    serde_json::from_slice(bytes).map_err(|err| {
+        AppError::from(secrets_core::Error::InvalidCharacters {
+            field: "payload",
+            value: err.to_string(),
+        })
+    })
+}
+
 fn scope_from_subject(parts: &SubjectParts) -> Result<secrets_core::Scope, AppError> {
     build_scope(&parts.env, &parts.tenant, parts.team.as_deref())
 }
@@ -407,6 +464,19 @@ async fn process_delete(
         version: version.version,
         deleted: true,
     })
+}
+
+async fn process_rotate(
+    state: AppState,
+    subject: &SubjectParts,
+    category: &str,
+    command: RotateCommand,
+    auth: &AuthContext,
+    correlation: &CorrelationId,
+) -> Result<RotateResponse, AppError> {
+    let scope = scope_from_subject(subject)?;
+    let job_id = command.job_id.unwrap_or_else(|| correlation.0.clone());
+    rotate::execute_rotation(state, scope, category, job_id, &auth.actor).await
 }
 
 fn marshal_response<T: Serialize>(

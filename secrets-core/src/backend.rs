@@ -3,6 +3,19 @@ use crate::types::{Scope, SecretListItem, SecretRecord};
 use crate::uri::SecretUri;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "aws")]
+pub mod aws;
+#[cfg(feature = "azure")]
+pub mod azure;
+#[cfg(feature = "env")]
+pub mod env;
+#[cfg(feature = "file")]
+pub mod file;
+#[cfg(feature = "gcp")]
+pub mod gcp;
+#[cfg(feature = "k8s")]
+pub mod k8s;
+
 /// Version metadata describing a specific revision of a secret.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecretVersion {

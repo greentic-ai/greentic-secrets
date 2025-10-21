@@ -33,6 +33,39 @@ pub async fn load_backend_components() -> Result<BackendComponents> {
                 bail!("gcp backend requested but gcp-sm feature is not enabled");
             }
         }
+        "azure" => {
+            #[cfg(feature = "azure-kv")]
+            {
+                azure_backend().await
+            }
+
+            #[cfg(not(feature = "azure-kv"))]
+            {
+                bail!("azure backend requested but azure-kv feature is not enabled");
+            }
+        }
+        "k8s" => {
+            #[cfg(feature = "k8s")]
+            {
+                k8s_backend().await
+            }
+
+            #[cfg(not(feature = "k8s"))]
+            {
+                bail!("k8s backend requested but k8s feature is not enabled");
+            }
+        }
+        "vault" => {
+            #[cfg(feature = "vault-kv")]
+            {
+                vault_backend().await
+            }
+
+            #[cfg(not(feature = "vault-kv"))]
+            {
+                bail!("vault backend requested but vault-kv feature is not enabled");
+            }
+        }
         other => Err(anyhow!("unsupported backend `{other}`")),
     }
 }
@@ -64,6 +97,39 @@ async fn gcp_backend() -> Result<BackendComponents> {
     let components = secrets_provider_gcp_sm::build_backend()
         .await
         .context("failed to initialize gcp secrets backend")?;
+    Ok(BackendComponents {
+        backend: components.backend,
+        key_provider: components.key_provider,
+    })
+}
+
+#[cfg(feature = "azure-kv")]
+async fn azure_backend() -> Result<BackendComponents> {
+    let components = secrets_provider_azure_kv::build_backend()
+        .await
+        .context("failed to initialize azure secrets backend")?;
+    Ok(BackendComponents {
+        backend: components.backend,
+        key_provider: components.key_provider,
+    })
+}
+
+#[cfg(feature = "k8s")]
+async fn k8s_backend() -> Result<BackendComponents> {
+    let components = secrets_provider_k8s::build_backend()
+        .await
+        .context("failed to initialize kubernetes secrets backend")?;
+    Ok(BackendComponents {
+        backend: components.backend,
+        key_provider: components.key_provider,
+    })
+}
+
+#[cfg(feature = "vault-kv")]
+async fn vault_backend() -> Result<BackendComponents> {
+    let components = secrets_provider_vault_kv::build_backend()
+        .await
+        .context("failed to initialize vault secrets backend")?;
     Ok(BackendComponents {
         backend: components.backend,
         key_provider: components.key_provider,
