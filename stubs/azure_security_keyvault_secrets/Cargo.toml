@@ -6,3 +6,6 @@ publish = false
 
 [lib]
 path = "lib.rs"
+
+[dependencies]
+azure_identity = { path = "../azure_identity" }

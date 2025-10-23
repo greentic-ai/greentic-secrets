@@ -8,7 +8,7 @@ members = [
     "providers/greentic-aws-sm",
     "providers/greentic-gcp-sm",
     "providers/greentic-azure-kv",
-    "providers/k8s",
+    "providers/greentic-k8s",
     "providers/greentic-vault-kv",
 ]
 resolver = "2"

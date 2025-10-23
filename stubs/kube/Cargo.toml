@@ -6,3 +6,6 @@ publish = false
 
 [lib]
 path = "lib.rs"
+
+[dependencies]
+k8s-openapi = { path = "../k8s-openapi" }

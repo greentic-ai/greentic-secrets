@@ -191,6 +191,9 @@ version = "0.0.0"
 [[package]]
 name = "aws-sdk-secretsmanager"
 version = "0.0.0"
+dependencies = [
+ "aws-config",
+]
 
 [[package]]
 name = "axum"
@@ -263,6 +266,9 @@ version = "0.0.0"
 [[package]]
 name = "azure_security_keyvault_secrets"
 version = "0.0.0"
+dependencies = [
+ "azure_identity",
+]
 
 [[package]]
 name = "base16ct"
@@ -1454,6 +1460,9 @@ version = "0.0.0"
 [[package]]
 name = "kube"
 version = "0.0.0"
+dependencies = [
+ "k8s-openapi",
+]
 
 [[package]]
 name = "lazy_static"
