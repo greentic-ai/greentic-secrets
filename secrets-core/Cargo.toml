@@ -8,6 +8,7 @@ repository = "https://github.com/greentic-ai/greentic"
 readme = "README.md"
 categories = ["config", "authentication", "cryptography"]
 keywords = ["secrets", "aws", "kubernetes", "gcp", "azure", "greentic"]
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE*"]
 
 [features]
 default = ["env", "file"]
@@ -56,3 +57,7 @@ tempfile = "3"
 anyhow = "1"
 once_cell = "1"
 wit-bindgen = "0.46.0"
+
+[lib]
+crate-type = ["rlib"]
+
