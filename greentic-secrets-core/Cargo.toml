@@ -7,7 +7,7 @@ description = "Embedded, pluggable, multi-cloud secrets for Greentic runtimes (n
 repository = "https://github.com/greentic-ai/greentic"
 readme = "README.md"
 categories = ["config", "authentication", "cryptography"]
-keywords = ["secrets", "aws", "kubernetes", "gcp", "azure", "greentic"]
+keywords = ["secrets", "kubernetes", "gcp", "azure", "greentic"]
 include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "README.md", "LICENSE*"]
 
 [features]
