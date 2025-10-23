@@ -8,16 +8,16 @@ repository = "https://github.com/greentic-ai/greentic"
 readme = "README.md"
 categories = ["config", "authentication", "cryptography"]
 keywords = ["secrets", "aws", "kubernetes", "gcp", "azure", "greentic"]
-include = ["src/**", "Cargo.toml", "README.md", "LICENSE*"]
+include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "README.md", "LICENSE*"]
 
 [features]
 default = ["env", "file"]
 env = []
 file = []
-k8s = ["dep:kube", "dep:k8s-openapi"]
-aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "imds"]
-gcp = ["dep:google-cloud-secretmanager"]
-azure = ["dep:azure_identity", "dep:azure_security_keyvault_secrets"]
+k8s = []
+aws = ["imds"]
+gcp = []
+azure = []
 imds = ["dep:reqwest"]
 nats = ["dep:async-nats", "dep:futures", "tokio"]
 schema = ["schemars"]
@@ -37,13 +37,6 @@ tokio = { workspace = true, optional = true }
 async-nats = { version = "0.44.2", optional = true }
 futures = { version = "0.3", optional = true }
 reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls"], optional = true }
-kube = { path = "../stubs/kube", optional = true, default-features = false }
-k8s-openapi = { path = "../stubs/k8s-openapi", optional = true, default-features = false }
-aws-config = { path = "../stubs/aws-config", optional = true, default-features = false }
-aws-sdk-secretsmanager = { path = "../stubs/aws-sdk-secretsmanager", optional = true, default-features = false }
-google-cloud-secretmanager = { path = "../stubs/google-cloud-secretmanager", optional = true, default-features = false }
-azure_identity = { path = "../stubs/azure_identity", optional = true, default-features = false }
-azure_security_keyvault_secrets = { path = "../stubs/azure_security_keyvault_secrets", optional = true, default-features = false }
 
 [dependencies.chacha20poly1305]
 version = "0.10"
