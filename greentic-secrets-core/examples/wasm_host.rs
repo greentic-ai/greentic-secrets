@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 wit_bindgen::generate!({
-    path: "../secrets-wit/wit",
+    path: "../greentic-secrets-wit/wit",
     world: "host",
 });
 

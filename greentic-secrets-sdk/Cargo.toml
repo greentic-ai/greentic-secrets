@@ -1,9 +1,12 @@
 [package]
-name = "secrets-sdk"
+name = "greentic-secrets-sdk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+
+[lib]
+name = "secrets_sdk"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -15,7 +18,7 @@ serde_json = { workspace = true }
 thiserror = "2.0.17"
 tokio = { workspace = true }
 tracing = { workspace = true }
-secrets-core = { path = "../secrets-core" }
+secrets-core = { package = "greentic-secrets-core", path = "../greentic-secrets-core" }
 uuid = { version = "1", features = ["v4"] }
 
 [[example]]

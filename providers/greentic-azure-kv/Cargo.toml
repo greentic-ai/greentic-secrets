@@ -1,21 +1,17 @@
 [package]
-name = "greentic-secrets-provider-k8s"
+name = "greentic-secrets-provider-azure-kv"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [lib]
-name = "secrets_provider_k8s"
-
-[features]
-default = []
-sealedsecrets = []
+name = "secrets_provider_azure_kv"
 
 [dependencies]
 anyhow = { workspace = true }
 base64 = "0.22.1"
-rand = "0.9.2"
 serde = { workspace = true }
+serde_json = { workspace = true }
 secrets-core = { package = "greentic-secrets-core", path = "../../greentic-secrets-core" }
-tracing = { workspace = true }
+rsa = "0.9.7"
