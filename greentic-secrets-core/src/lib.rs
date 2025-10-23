@@ -10,6 +10,8 @@ pub mod imds;
 pub mod key_provider;
 pub mod policy;
 pub mod probe;
+pub mod provider;
+pub mod resolver;
 pub mod spec;
 pub mod spec_registry;
 pub mod spec_schema;
@@ -38,6 +40,8 @@ pub use embedded::{
 pub use errors::{DecryptError, DecryptResult, Error, Result};
 pub use key_provider::KeyProvider;
 pub use policy::{Authorizer, PolicyGuard, Principal};
+pub use provider::Provider;
+pub use resolver::{DefaultResolver, ResolverConfig};
 pub use spec::{SecretDescribable, SecretSpec};
 pub use types::{
     ContentType, EncryptionAlgorithm, Envelope, Scope, SecretIdentifier, SecretListItem,

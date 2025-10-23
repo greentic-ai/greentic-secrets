@@ -194,14 +194,33 @@ impl CoreBuilder {
     }
 
     /// Register a backend with its corresponding key provider.
-    pub fn backend<B, K>(mut self, backend: B, key_provider: K) -> Self
+    pub fn backend<B, K>(self, backend: B, key_provider: K) -> Self
+    where
+        B: SecretsBackend + 'static,
+        K: KeyProvider + 'static,
+    {
+        self.backend_named("custom", backend, key_provider)
+    }
+
+    /// Register a backend with a specific identifier.
+    pub fn backend_named<B, K>(
+        mut self,
+        name: impl Into<String>,
+        backend: B,
+        key_provider: K,
+    ) -> Self
     where
         B: SecretsBackend + 'static,
         K: KeyProvider + 'static,
     {
         self.backends
-            .push(BackendRegistration::new("custom", backend, key_provider));
+            .push(BackendRegistration::new(name, backend, key_provider));
         self
+    }
+
+    /// Remove any previously registered backends.
+    pub fn clear_backends(&mut self) {
+        self.backends.clear();
     }
 
     /// If no backends have been explicitly registered, add sensible defaults.
