@@ -18,7 +18,7 @@ serde_json = { workspace = true }
 thiserror = "2.0.17"
 tokio = { workspace = true }
 tracing = { workspace = true }
-secrets-core = { package = "greentic-secrets-core", path = "../greentic-secrets-core" }
+secrets-core = { package = "greentic-secrets-core", version = "=0.1.1", path = "../greentic-secrets-core" }
 uuid = { version = "1", features = ["v4"] }
 
 [[example]]

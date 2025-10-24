@@ -31,7 +31,7 @@ tower = "0.5.2"
 tower-http = { version = "0.6.6", features = ["trace"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-secrets-core = { package = "greentic-secrets-core", path = "../greentic-secrets-core" }
+secrets-core = { package = "greentic-secrets-core", version = "=0.1.1", path = "../greentic-secrets-core" }
 secrets-provider-dev = { package = "greentic-secrets-provider-dev", path = "../providers/greentic-dev" }
 secrets-provider-aws-sm = { package = "greentic-secrets-provider-aws-sm", path = "../providers/greentic-aws-sm", optional = true }
 secrets-provider-gcp-sm = { package = "greentic-secrets-provider-gcp-sm", path = "../providers/greentic-gcp-sm", optional = true }

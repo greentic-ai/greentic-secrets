@@ -13,5 +13,5 @@ anyhow = { workspace = true }
 base64 = "0.22.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
-secrets-core = { package = "greentic-secrets-core", path = "../../greentic-secrets-core" }
+secrets-core = { package = "greentic-secrets-core", version = "=0.1.1", path = "../../greentic-secrets-core" }
 rsa = "0.9.7"
