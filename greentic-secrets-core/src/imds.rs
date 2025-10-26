@@ -1,5 +1,3 @@
-#![cfg(feature = "imds")]
-
 use std::time::Duration;
 
 /// Perform a low-latency HTTP `HEAD` request to an instance metadata endpoint.

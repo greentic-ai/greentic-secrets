@@ -1,0 +1,21 @@
+[package]
+name = "greentic-secrets-support"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Helper utilities for Greentic secrets providers (constructors, crypto envelope, URI helpers)."
+repository = "https://github.com/greentic-ai/greentic-secrets"
+
+[features]
+default = ["serde", "crypto-ring"]
+serde = ["dep:serde"]
+crypto-ring = ["dep:ring"]
+crypto-none = []
+
+[dependencies]
+greentic-secrets-spec = { path = "../greentic-secrets-spec", version = "0.1.0" }
+async-trait = "0.1"
+time = "0.3"
+serde = { version = "1", features = ["derive"], optional = true }
+ring = { version = "0.17", optional = true }
+base64 = "0.22"

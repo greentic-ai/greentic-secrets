@@ -1,9 +1,9 @@
-use crate::backend::{SecretVersion, SecretsBackend};
 use crate::crypto::envelope::EnvelopeService;
-use crate::errors::{DecryptError, DecryptResult, Result};
 use crate::key_provider::KeyProvider;
-use crate::types::{Scope, SecretListItem, SecretMeta};
-use crate::uri::SecretUri;
+use crate::spec_compat::{
+    ContentType, DecryptError, DecryptResult, Result, Scope, SecretListItem, SecretMeta, SecretUri,
+    SecretVersion, SecretsBackend,
+};
 
 /// Decrypted secret returned by the broker façade.
 #[derive(Debug, Clone)]
@@ -15,7 +15,7 @@ pub struct BrokerSecret {
 
 impl BrokerSecret {
     /// Convenience accessor for the secret's content type.
-    pub fn content_type(&self) -> crate::types::ContentType {
+    pub fn content_type(&self) -> ContentType {
         self.meta.content_type
     }
 }

@@ -9,12 +9,12 @@
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use greentic_secrets_spec::prelude::*;
+use greentic_secrets_spec::{
+    Scope, SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
+};
+use greentic_secrets_support::KeyProvider;
 use rand::{rng, Rng};
-use secrets_core::backend::{SecretVersion, SecretsBackend, VersionedSecret};
-use secrets_core::errors::{Error as CoreError, Result as CoreResult};
-use secrets_core::key_provider::KeyProvider;
-use secrets_core::types::{Envelope, Scope, SecretListItem, SecretMeta, SecretRecord};
-use secrets_core::uri::SecretUri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -78,9 +78,9 @@ impl K8sSecretsBackend {
 }
 
 impl SecretsBackend for K8sSecretsBackend {
-    fn put(&self, record: SecretRecord) -> CoreResult<SecretVersion> {
+    fn put(&self, record: SecretRecord) -> SecretsResult<SecretVersion> {
         if record.value.len() > self.config.max_secret_size {
-            return Err(CoreError::Storage(format!(
+            return Err(SecretsError::Storage(format!(
                 "secret payload exceeds configured Kubernetes limit of {} bytes",
                 self.config.max_secret_size
             )));
@@ -115,7 +115,7 @@ impl SecretsBackend for K8sSecretsBackend {
         })
     }
 
-    fn get(&self, uri: &SecretUri, version: Option<u64>) -> CoreResult<Option<VersionedSecret>> {
+    fn get(&self, uri: &SecretUri, version: Option<u64>) -> SecretsResult<Option<VersionedSecret>> {
         let guard = self.store.lock().unwrap();
         let entry = match guard.get(&self.storage_key(uri)) {
             Some(v) => v,
@@ -136,7 +136,7 @@ impl SecretsBackend for K8sSecretsBackend {
         scope: &Scope,
         category_prefix: Option<&str>,
         name_prefix: Option<&str>,
-    ) -> CoreResult<Vec<SecretListItem>> {
+    ) -> SecretsResult<Vec<SecretListItem>> {
         let guard = self.store.lock().unwrap();
         let mut items = Vec::new();
         for versions in guard.values() {
@@ -169,11 +169,11 @@ impl SecretsBackend for K8sSecretsBackend {
         Ok(items)
     }
 
-    fn delete(&self, uri: &SecretUri) -> CoreResult<SecretVersion> {
+    fn delete(&self, uri: &SecretUri) -> SecretsResult<SecretVersion> {
         let mut guard = self.store.lock().unwrap();
         let entry = guard
             .get_mut(&self.storage_key(uri))
-            .ok_or_else(|| CoreError::Storage("secret does not exist".into()))?;
+            .ok_or_else(|| SecretsError::Storage("secret does not exist".into()))?;
         let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
         entry.push(StoredSecret {
             version: next_version,
@@ -187,7 +187,7 @@ impl SecretsBackend for K8sSecretsBackend {
         })
     }
 
-    fn versions(&self, uri: &SecretUri) -> CoreResult<Vec<SecretVersion>> {
+    fn versions(&self, uri: &SecretUri) -> SecretsResult<Vec<SecretVersion>> {
         let guard = self.store.lock().unwrap();
         Ok(guard
             .get(&self.storage_key(uri))
@@ -201,7 +201,7 @@ impl SecretsBackend for K8sSecretsBackend {
             .collect())
     }
 
-    fn exists(&self, uri: &SecretUri) -> CoreResult<bool> {
+    fn exists(&self, uri: &SecretUri) -> SecretsResult<bool> {
         let guard = self.store.lock().unwrap();
         Ok(guard
             .get(&self.storage_key(uri))
@@ -240,22 +240,22 @@ impl K8sKeyProvider {
 }
 
 impl KeyProvider for K8sKeyProvider {
-    fn wrap_dek(&self, scope: &Scope, dek: &[u8]) -> CoreResult<Vec<u8>> {
+    fn wrap_dek(&self, scope: &Scope, dek: &[u8]) -> SecretsResult<Vec<u8>> {
         let alias = self
             .config
             .key_aliases
             .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| CoreError::Crypto("missing key material alias".into()))?;
+            .ok_or_else(|| SecretsError::Crypto("missing key material alias".into()))?;
         let key = self.get_or_create_key(alias);
         Ok(xor_bytes(&key, dek))
     }
 
-    fn unwrap_dek(&self, scope: &Scope, wrapped: &[u8]) -> CoreResult<Vec<u8>> {
+    fn unwrap_dek(&self, scope: &Scope, wrapped: &[u8]) -> SecretsResult<Vec<u8>> {
         let alias = self
             .config
             .key_aliases
             .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| CoreError::Crypto("missing key material alias".into()))?;
+            .ok_or_else(|| SecretsError::Crypto("missing key material alias".into()))?;
         let key = self.get_or_create_key(alias);
         Ok(xor_bytes(&key, wrapped))
     }
@@ -363,7 +363,7 @@ impl StoredSecret {
         record: &SecretRecord,
         deleted: bool,
         kube_name: Option<String>,
-    ) -> CoreResult<Self> {
+    ) -> SecretsResult<Self> {
         Ok(Self {
             version: 0,
             deleted,
@@ -377,7 +377,7 @@ impl StoredSecret {
         self
     }
 
-    fn into_versioned(self) -> CoreResult<VersionedSecret> {
+    fn into_versioned(self) -> SecretsResult<VersionedSecret> {
         if self.deleted {
             return Ok(VersionedSecret {
                 version: self.version,
@@ -387,7 +387,7 @@ impl StoredSecret {
         }
         let record = self
             .record
-            .ok_or_else(|| CoreError::Storage("missing record".into()))?
+            .ok_or_else(|| SecretsError::Storage("missing record".into()))?
             .into_record()?;
         Ok(VersionedSecret {
             version: self.version,
@@ -396,13 +396,13 @@ impl StoredSecret {
         })
     }
 
-    fn into_list_item(self) -> CoreResult<Option<SecretListItem>> {
+    fn into_list_item(self) -> SecretsResult<Option<SecretListItem>> {
         if self.deleted {
             return Ok(None);
         }
         let record = self
             .record
-            .ok_or_else(|| CoreError::Storage("missing record".into()))?;
+            .ok_or_else(|| SecretsError::Storage("missing record".into()))?;
         Ok(Some(SecretListItem::from_meta(
             &record.meta,
             Some(self.version.to_string()),
@@ -418,7 +418,7 @@ struct StoredRecord {
 }
 
 impl StoredRecord {
-    fn from_record(record: &SecretRecord) -> CoreResult<Self> {
+    fn from_record(record: &SecretRecord) -> SecretsResult<Self> {
         Ok(Self {
             meta: record.meta.clone(),
             envelope: StoredEnvelope::from_envelope(&record.envelope),
@@ -426,7 +426,7 @@ impl StoredRecord {
         })
     }
 
-    fn into_record(self) -> CoreResult<SecretRecord> {
+    fn into_record(self) -> SecretsResult<SecretRecord> {
         Ok(SecretRecord::new(
             self.meta,
             decode_bytes(&self.value)?,
@@ -453,12 +453,12 @@ impl StoredEnvelope {
         }
     }
 
-    fn into_envelope(self) -> CoreResult<Envelope> {
+    fn into_envelope(self) -> SecretsResult<Envelope> {
         Ok(Envelope {
             algorithm: self
                 .algorithm
                 .parse()
-                .map_err(|_| CoreError::Storage("invalid algorithm".into()))?,
+                .map_err(|_| SecretsError::Storage("invalid algorithm".into()))?,
             nonce: decode_bytes(&self.nonce)?,
             hkdf_salt: decode_bytes(&self.hkdf_salt)?,
             wrapped_dek: decode_bytes(&self.wrapped_dek)?,
@@ -549,16 +549,16 @@ fn canonical_storage_key(uri: &SecretUri) -> String {
     )
 }
 
-fn decode_bytes(input: &str) -> CoreResult<Vec<u8>> {
+fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
     STANDARD
         .decode(input.as_bytes())
-        .map_err(|err| CoreError::Storage(err.to_string()))
+        .map_err(|err| SecretsError::Storage(err.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrets_core::types::{ContentType, EncryptionAlgorithm, Visibility};
+    use greentic_secrets_spec::{ContentType, EncryptionAlgorithm, Visibility};
 
     fn sample_record() -> SecretRecord {
         let scope = Scope::new("prod", "payments", Some("core_team".into())).unwrap();
@@ -605,7 +605,7 @@ mod tests {
         let mut record = sample_record();
         record.value = vec![0u8; 16];
         let err = backend.put(record).unwrap_err();
-        assert!(matches!(err, CoreError::Storage(_)));
+        assert!(matches!(err, SecretsError::Storage(_)));
     }
 
     #[test]

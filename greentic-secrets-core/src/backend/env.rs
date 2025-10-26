@@ -1,7 +1,7 @@
-use crate::backend::{SecretVersion, SecretsBackend, VersionedSecret};
-use crate::errors::{Error as CoreError, Result as CoreResult};
-use crate::types::{Scope, SecretListItem, SecretRecord};
-use crate::uri::SecretUri;
+use crate::spec_compat::{
+    Error as CoreError, Result as CoreResult, Scope, SecretListItem, SecretRecord, SecretUri,
+    SecretVersion, SecretsBackend, VersionedSecret,
+};
 
 /// Read-only backend that fetches secrets from process environment variables.
 #[derive(Debug, Default, Clone, Copy)]
@@ -97,18 +97,21 @@ fn sanitize_segment(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContentType, Envelope, SecretMeta, Visibility};
+    use crate::spec_compat::{ContentType, Envelope, SecretMeta, Visibility};
+    use greentic_secrets_support::{record_from_plain, with_ttl};
 
     fn sample_record(uri: SecretUri) -> SecretRecord {
+        let mut record = record_from_plain(r#"{"token":"value"}"#);
         let mut meta = SecretMeta::new(uri, Visibility::Team, ContentType::Json);
         meta.description = Some("env backend".into());
-        let envelope = Envelope {
-            algorithm: crate::types::EncryptionAlgorithm::Aes256Gcm,
+        record.meta = meta;
+        record.envelope = Envelope {
+            algorithm: crate::spec_compat::EncryptionAlgorithm::Aes256Gcm,
             nonce: vec![1, 2, 3],
             hkdf_salt: vec![4, 5, 6],
             wrapped_dek: vec![7, 8, 9],
         };
-        SecretRecord::new(meta, br#"{"token":"value"}"#.to_vec(), envelope)
+        with_ttl(record, 1800)
     }
 
     #[test]

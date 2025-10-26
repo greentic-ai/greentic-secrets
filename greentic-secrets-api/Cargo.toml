@@ -1,0 +1,14 @@
+[package]
+name = "greentic-secrets-api"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Shared traits and types for Greentic secrets backends"
+repository = "https://github.com/greentic-ai/greentic-secrets"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+thiserror = "1"

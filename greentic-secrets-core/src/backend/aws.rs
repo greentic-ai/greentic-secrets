@@ -1,7 +1,7 @@
-use crate::backend::{SecretVersion, SecretsBackend, VersionedSecret};
-use crate::errors::{Error as CoreError, Result as CoreResult};
-use crate::types::{Scope, SecretListItem, SecretRecord};
-use crate::uri::SecretUri;
+use crate::spec_compat::{
+    Error as CoreError, Result as CoreResult, Scope, SecretListItem, SecretRecord, SecretUri,
+    SecretVersion, SecretsBackend, VersionedSecret,
+};
 
 /// AWS Secrets Manager backend (feature-gated placeholder).
 ///
@@ -15,6 +15,7 @@ impl AwsSecretsManagerBackend {
         Self
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn secret_id(uri: &SecretUri) -> String {
         format!(
             "gtsec/{}/{}/{}/{}/{}",
@@ -65,6 +66,7 @@ impl SecretsBackend for AwsSecretsManagerBackend {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn sanitize(input: &str) -> String {
     input
         .chars()

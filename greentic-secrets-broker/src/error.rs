@@ -107,12 +107,12 @@ impl From<secrets_core::Error> for AppError {
             | secrets_core::Error::ExtraSegments
             | secrets_core::Error::InvalidVersion { .. }
             | secrets_core::Error::UnsupportedAlgorithm(_)
-            | secrets_core::Error::AlgorithmFeatureUnavailable(_) => {
-                AppErrorKind::BadRequest(value.to_string())
-            }
+            | secrets_core::Error::AlgorithmFeatureUnavailable(_)
+            | secrets_core::Error::Invalid(_, _) => AppErrorKind::BadRequest(value.to_string()),
             secrets_core::Error::NotFound { .. } => AppErrorKind::NotFound,
-            secrets_core::Error::Storage(err) => AppErrorKind::Internal(err),
-            secrets_core::Error::Crypto(err) => AppErrorKind::Internal(err),
+            secrets_core::Error::Storage(err)
+            | secrets_core::Error::Crypto(err)
+            | secrets_core::Error::Backend(err) => AppErrorKind::Internal(err),
         };
         AppError::new(kind)
     }

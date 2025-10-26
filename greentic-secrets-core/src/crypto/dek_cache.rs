@@ -1,4 +1,4 @@
-use crate::types::{Scope, SecretMeta};
+use crate::spec_compat::{Scope, SecretMeta};
 use lru::LruCache;
 use std::env;
 use std::num::NonZeroUsize;
@@ -141,7 +141,7 @@ impl DekCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContentType, SecretMeta, Visibility};
+    use crate::spec_compat::{ContentType, SecretMeta, Visibility};
     use crate::uri::SecretUri;
 
     fn sample_meta(team: Option<&str>) -> SecretMeta {

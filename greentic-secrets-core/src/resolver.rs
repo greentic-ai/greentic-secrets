@@ -7,7 +7,6 @@ use crate::probe;
 use crate::provider::Provider;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::warn;
 
 /// High-level configuration for the default resolver.
 #[derive(Debug, Clone)]
@@ -126,7 +125,7 @@ impl DefaultResolver {
     }
 
     /// Build a resolver from the provided configuration.
-    pub async fn from_config(mut config: ResolverConfig) -> Result<Self, SecretsError> {
+    pub async fn from_config(config: ResolverConfig) -> Result<Self, SecretsError> {
         let mut builder = SecretsCore::builder();
         builder.clear_backends();
 
@@ -148,12 +147,12 @@ impl DefaultResolver {
 
         let requested = config.provider;
         let selected = if let Provider::Auto = requested {
-            detect_provider(&config).await
+            detect_provider().await
         } else {
             requested
         };
 
-        let (builder, resolved) = configure_builder_for_provider(builder, &mut config, selected);
+        let (builder, resolved) = configure_builder_for_provider(builder, &config, selected);
         let core = builder.build().await?;
 
         Ok(Self {
@@ -181,7 +180,7 @@ impl std::ops::Deref for DefaultResolver {
     }
 }
 
-async fn detect_provider(config: &ResolverConfig) -> Provider {
+async fn detect_provider() -> Provider {
     if probe::is_kubernetes().await {
         return Provider::K8s;
     }
@@ -198,11 +197,7 @@ async fn detect_provider(config: &ResolverConfig) -> Provider {
         return Provider::Azure;
     }
 
-    if config.dev_fallback {
-        Provider::Local
-    } else {
-        Provider::Local
-    }
+    Provider::Local
 }
 
 fn configure_builder_for_provider(
@@ -245,17 +240,18 @@ fn configure_local(mut builder: CoreBuilder, config: &ResolverConfig) -> (CoreBu
 fn configure_aws(builder: CoreBuilder, config: &ResolverConfig) -> (CoreBuilder, Provider) {
     #[cfg(feature = "aws")]
     {
+        let _ = config;
         let builder = builder.backend_named(
             "aws",
             crate::backend::aws::AwsSecretsManagerBackend::new(),
             MemoryKeyProvider::default(),
         );
-        return (builder, Provider::Aws);
+        (builder, Provider::Aws)
     }
 
     #[cfg(not(feature = "aws"))]
     {
-        warn!(
+        tracing::warn!(
             "aws provider requested but the `aws` feature is not enabled; falling back to local provider"
         );
         configure_local(builder, config)
@@ -265,17 +261,18 @@ fn configure_aws(builder: CoreBuilder, config: &ResolverConfig) -> (CoreBuilder,
 fn configure_azure(builder: CoreBuilder, config: &ResolverConfig) -> (CoreBuilder, Provider) {
     #[cfg(feature = "azure")]
     {
+        let _ = config;
         let builder = builder.backend_named(
             "azure",
             crate::backend::azure::AzureKeyVaultBackend::new(),
             MemoryKeyProvider::default(),
         );
-        return (builder, Provider::Azure);
+        (builder, Provider::Azure)
     }
 
     #[cfg(not(feature = "azure"))]
     {
-        warn!(
+        tracing::warn!(
             "azure provider requested but the `azure` feature is not enabled; falling back to local provider"
         );
         configure_local(builder, config)
@@ -285,17 +282,18 @@ fn configure_azure(builder: CoreBuilder, config: &ResolverConfig) -> (CoreBuilde
 fn configure_gcp(builder: CoreBuilder, config: &ResolverConfig) -> (CoreBuilder, Provider) {
     #[cfg(feature = "gcp")]
     {
+        let _ = config;
         let builder = builder.backend_named(
             "gcp",
             crate::backend::gcp::GcpSecretsManagerBackend::new(),
             MemoryKeyProvider::default(),
         );
-        return (builder, Provider::Gcp);
+        (builder, Provider::Gcp)
     }
 
     #[cfg(not(feature = "gcp"))]
     {
-        warn!(
+        tracing::warn!(
             "gcp provider requested but the `gcp` feature is not enabled; falling back to local provider"
         );
         configure_local(builder, config)
@@ -305,17 +303,18 @@ fn configure_gcp(builder: CoreBuilder, config: &ResolverConfig) -> (CoreBuilder,
 fn configure_k8s(builder: CoreBuilder, config: &ResolverConfig) -> (CoreBuilder, Provider) {
     #[cfg(feature = "k8s")]
     {
+        let _ = config;
         let builder = builder.backend_named(
             "k8s",
             crate::backend::k8s::K8sBackend::new(),
             MemoryKeyProvider::default(),
         );
-        return (builder, Provider::K8s);
+        (builder, Provider::K8s)
     }
 
     #[cfg(not(feature = "k8s"))]
     {
-        warn!(
+        tracing::warn!(
             "k8s provider requested but the `k8s` feature is not enabled; falling back to local provider"
         );
         configure_local(builder, config)

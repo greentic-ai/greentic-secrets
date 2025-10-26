@@ -12,7 +12,9 @@ name = "secrets_provider_dev"
 base64 = "0.22.1"
 fs2 = "0.4"
 parking_lot = "0.12"
-secrets-core = { package = "greentic-secrets-core", version = "=0.1.1", path = "../../greentic-secrets-core" }
+async-trait = "0.1"
+greentic-secrets-spec = { path = "../../greentic-secrets-spec", version = "0.1.0" }
+greentic-secrets-support = { path = "../../greentic-secrets-support", version = "0.1.0" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"

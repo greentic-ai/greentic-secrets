@@ -1,7 +1,7 @@
-use crate::backend::{SecretVersion, SecretsBackend, VersionedSecret};
-use crate::errors::{Error as CoreError, Result as CoreResult};
-use crate::types::{Scope, SecretListItem, SecretRecord};
-use crate::uri::SecretUri;
+use crate::spec_compat::{
+    Error as CoreError, Result as CoreResult, Scope, SecretListItem, SecretRecord, SecretUri,
+    SecretVersion, SecretsBackend, VersionedSecret,
+};
 
 /// Google Secret Manager backend placeholder (feature-gated).
 #[derive(Debug, Clone, Default)]

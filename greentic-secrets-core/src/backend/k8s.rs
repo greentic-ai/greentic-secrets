@@ -1,7 +1,7 @@
-use crate::backend::{SecretVersion, SecretsBackend, VersionedSecret};
-use crate::errors::{Error as CoreError, Result as CoreResult};
-use crate::types::{Scope, SecretListItem, SecretRecord};
-use crate::uri::SecretUri;
+use crate::spec_compat::{
+    Error as CoreError, Result as CoreResult, Scope, SecretListItem, SecretRecord, SecretUri,
+    SecretVersion, SecretsBackend, VersionedSecret,
+};
 
 /// Kubernetes-backed secrets store (feature-gated).
 ///
@@ -24,6 +24,7 @@ impl K8sBackend {
         Self
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn namespace_for(uri: &SecretUri) -> String {
         let mut ns = format!(
             "gtsec-{}-{}",
@@ -37,6 +38,7 @@ impl K8sBackend {
         ns
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn secret_name_for(uri: &SecretUri) -> String {
         format!("{}-{}", sanitize(uri.category()), sanitize(uri.name()))
     }
@@ -77,6 +79,7 @@ impl SecretsBackend for K8sBackend {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn sanitize(input: &str) -> String {
     input
         .chars()
@@ -92,7 +95,8 @@ fn sanitize(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContentType, Envelope, SecretMeta, Visibility};
+    use crate::spec_compat::{ContentType, Envelope, SecretMeta, Visibility};
+    use greentic_secrets_support::{record_from_plain, with_ttl};
 
     fn sample_uri(team: Option<&str>) -> SecretUri {
         let scope = Scope::new("prod", "tenant", team.map(|t| t.to_string())).unwrap();
@@ -117,15 +121,19 @@ mod tests {
     fn integration_placeholder() {
         let backend = K8sBackend::new();
         let uri = sample_uri(None);
+        let mut record = record_from_plain(String::new());
         let mut meta = SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Json);
         meta.description = Some("placeholder".into());
-        let envelope = Envelope {
-            algorithm: crate::types::EncryptionAlgorithm::Aes256Gcm,
+        record.meta = meta;
+        record.envelope = Envelope {
+            algorithm: crate::spec_compat::EncryptionAlgorithm::Aes256Gcm,
             nonce: vec![],
             hkdf_salt: vec![],
             wrapped_dek: vec![],
         };
-        let record = SecretRecord::new(meta, vec![], envelope);
-        let _ = backend.put(record).err().expect("backend placeholder");
+        let _ = backend
+            .put(with_ttl(record, 120))
+            .err()
+            .expect("backend placeholder");
     }
 }

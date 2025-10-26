@@ -1,16 +1,17 @@
-use crate::backend::{SecretVersion, SecretsBackend, VersionedSecret};
 use crate::broker::{BrokerSecret, SecretsBroker};
 use crate::crypto::dek_cache::DekCache;
 use crate::crypto::envelope::EnvelopeService;
-use crate::errors::{Error as CoreError, Result as CoreResult};
 use crate::key_provider::KeyProvider;
-use crate::types::{ContentType, Scope, SecretListItem, SecretMeta, SecretRecord, Visibility};
-use crate::uri::SecretUri;
-use crate::EncryptionAlgorithm;
+use crate::spec_compat::{
+    ContentType, DecryptError, EncryptionAlgorithm, Error as CoreError, Result as CoreResult,
+    Scope, SecretListItem, SecretMeta, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
+    VersionedSecret, Visibility,
+};
 #[cfg(feature = "nats")]
 use async_nats;
 #[cfg(feature = "nats")]
 use futures::StreamExt;
+use greentic_secrets_support::parse as parse_key;
 use lru::LruCache;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -28,7 +29,7 @@ pub enum SecretsError {
     Core(#[from] CoreError),
     /// Wrapper for decrypt failures.
     #[error("{0}")]
-    Decrypt(#[from] crate::DecryptError),
+    Decrypt(#[from] DecryptError),
     /// JSON serialisation failure.
     #[error("{0}")]
     Json(#[from] serde_json::Error),
@@ -218,6 +219,14 @@ impl CoreBuilder {
         self
     }
 
+    /// Register a backend with the default memory key provider.
+    pub fn with_backend<B>(self, name: impl Into<String>, backend: B) -> Self
+    where
+        B: SecretsBackend + 'static,
+    {
+        self.backend_named(name, backend, MemoryKeyProvider::default())
+    }
+
     /// Remove any previously registered backends.
     pub fn clear_backends(&mut self) {
         self.backends.clear();
@@ -228,19 +237,21 @@ impl CoreBuilder {
     /// The current implementation falls back to the environment backend and,
     /// when configured via `GREENTIC_SECRETS_FILE_ROOT`, the filesystem backend.
     /// Future revisions will extend this to include cloud provider probes.
-    pub async fn auto_detect_backends(mut self) -> Self {
-        if !self.backends.is_empty() {
-            return self;
+    pub async fn auto_detect_backends(self) -> Self {
+        #[allow(unused_mut)]
+        let mut builder = self;
+        if !builder.backends.is_empty() {
+            return builder;
         }
 
         if std::env::var_os("GREENTIC_SECRETS_BACKENDS").is_some() {
-            return self;
+            return builder;
         }
 
         if crate::probe::is_kubernetes().await {
             #[cfg(feature = "k8s")]
             {
-                self = self.backend(
+                builder = builder.backend(
                     crate::backend::k8s::K8sBackend::new(),
                     MemoryKeyProvider::default(),
                 );
@@ -251,7 +262,7 @@ impl CoreBuilder {
             #[cfg(feature = "aws")]
             {
                 let backend = crate::backend::aws::AwsSecretsManagerBackend::new();
-                self = self.backend(backend, MemoryKeyProvider::default());
+                builder = builder.backend(backend, MemoryKeyProvider::default());
             }
         }
 
@@ -259,7 +270,7 @@ impl CoreBuilder {
             #[cfg(feature = "gcp")]
             {
                 let backend = crate::backend::gcp::GcpSecretsManagerBackend::new();
-                self = self.backend(backend, MemoryKeyProvider::default());
+                builder = builder.backend(backend, MemoryKeyProvider::default());
             }
         }
 
@@ -267,13 +278,13 @@ impl CoreBuilder {
             #[cfg(feature = "azure")]
             {
                 let backend = crate::backend::azure::AzureKeyVaultBackend::new();
-                self = self.backend(backend, MemoryKeyProvider::default());
+                builder = builder.backend(backend, MemoryKeyProvider::default());
             }
         }
 
         #[cfg(feature = "env")]
         {
-            self = self.backend(
+            builder = builder.backend(
                 crate::backend::env::EnvBackend::new(),
                 MemoryKeyProvider::default(),
             );
@@ -283,7 +294,7 @@ impl CoreBuilder {
         {
             if let Ok(root) = std::env::var("GREENTIC_SECRETS_FILE_ROOT") {
                 if !root.is_empty() {
-                    self = self.backend(
+                    builder = builder.backend(
                         crate::backend::file::FileBackend::new(root),
                         MemoryKeyProvider::default(),
                     );
@@ -291,7 +302,7 @@ impl CoreBuilder {
             }
         }
 
-        self
+        builder
     }
 
     /// Override the policy (currently only `AllowAll` is supported).
@@ -462,7 +473,7 @@ impl SecretsCore {
     }
 
     fn parse_uri(&self, uri: &str) -> Result<SecretUri, SecretsError> {
-        SecretUri::try_from(uri).map_err(SecretsError::from)
+        Ok(parse_key(uri)?)
     }
 
     fn cached_value(&self, uri: &SecretUri) -> Option<Vec<u8>> {
@@ -537,7 +548,7 @@ fn spawn_invalidation_listener(
     tenant: String,
     url: String,
 ) {
-    let subject = format!("secrets.changed.{}.*", tenant);
+    let subject = format!("secrets.changed.{tenant}.*");
     tokio::spawn(async move {
         if let Ok(client) = async_nats::connect(&url).await {
             if let Ok(mut sub) = client.subscribe(subject).await {

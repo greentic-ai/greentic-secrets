@@ -1,7 +1,7 @@
-use crate::backend::{SecretVersion, SecretsBackend, VersionedSecret};
-use crate::errors::{Error as CoreError, Result as CoreResult};
-use crate::types::{Scope, SecretListItem, SecretRecord};
-use crate::uri::SecretUri;
+use crate::spec_compat::{
+    Error as CoreError, Result as CoreResult, Scope, SecretListItem, SecretRecord, SecretUri,
+    SecretVersion, SecretsBackend, VersionedSecret,
+};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -208,14 +208,14 @@ fn read_dir_filtered(path: &Path) -> CoreResult<Vec<(String, PathBuf)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContentType, Envelope, SecretMeta, Visibility};
+    use crate::spec_compat::{ContentType, Envelope, SecretMeta, Visibility};
     use tempfile::tempdir;
 
     fn sample_record(uri: SecretUri) -> SecretRecord {
         let mut meta = SecretMeta::new(uri, Visibility::Team, ContentType::Json);
         meta.description = Some("file backend".into());
         let envelope = Envelope {
-            algorithm: crate::types::EncryptionAlgorithm::Aes256Gcm,
+            algorithm: crate::spec_compat::EncryptionAlgorithm::Aes256Gcm,
             nonce: vec![1, 2, 3],
             hkdf_salt: vec![4, 5, 6],
             wrapped_dek: vec![7, 8, 9],

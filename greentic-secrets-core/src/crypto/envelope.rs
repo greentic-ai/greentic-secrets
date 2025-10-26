@@ -1,21 +1,23 @@
 use crate::crypto::dek_cache::{CacheKey, DekCache, DekMaterial};
-use crate::errors::{DecryptError, DecryptResult, Error, Result};
 use crate::key_provider::KeyProvider;
-use crate::types::{EncryptionAlgorithm, Envelope, Scope, SecretMeta, SecretRecord};
-#[allow(deprecated)]
-use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::Aes256Gcm;
+use crate::spec_compat::{
+    DecryptError, DecryptResult, EncryptionAlgorithm, Envelope, Error, Result, Scope, SecretMeta,
+    SecretRecord,
+};
+use base64::{engine::general_purpose::STANDARD, Engine};
+use greentic_secrets_support::{open_aead, seal_aead};
 use hkdf::Hkdf;
 use rand::RngCore;
 use sha2::Sha256;
 use std::env;
 
 #[cfg(feature = "xchacha")]
-use chacha20poly1305::{Nonce as XNonce, XChaCha20Poly1305};
+use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305, XNonce};
 
 const DEFAULT_DEK_LEN: usize = 32;
 const HKDF_SALT_LEN: usize = 32;
+#[cfg(feature = "xchacha")]
+const XCHACHA_NONCE_LEN: usize = 24;
 const ENC_ALGO_ENV: &str = "SECRETS_ENC_ALGO";
 
 /// High-level service responsible for encrypting and decrypting secret records.
@@ -78,8 +80,7 @@ where
 
         let salt = random_bytes(HKDF_SALT_LEN);
         let key = derive_key(&dek, &salt, info.as_bytes())?;
-        let nonce = random_bytes(self.algorithm.nonce_len());
-        let ciphertext = encrypt_with_algorithm(self.algorithm, &key, &nonce, plaintext)?;
+        let (nonce, ciphertext) = encrypt_with_algorithm(self.algorithm, &key, plaintext)?;
 
         let envelope = Envelope {
             algorithm: self.algorithm,
@@ -139,30 +140,38 @@ where
     }
 }
 
-#[allow(deprecated)]
 fn encrypt_with_algorithm(
     algorithm: EncryptionAlgorithm,
     key: &[u8; 32],
-    nonce: &[u8],
     plaintext: &[u8],
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, Vec<u8>)> {
     match algorithm {
         EncryptionAlgorithm::Aes256Gcm => {
-            let cipher = Aes256Gcm::new_from_slice(key)
-                .map_err(|_| Error::Crypto("invalid AES key".into()))?;
-            let nonce = GenericArray::clone_from_slice(nonce);
-            cipher
-                .encrypt(&nonce, plaintext)
-                .map_err(|_| Error::Crypto("failed to encrypt payload".into()))
+            let sealed = seal_aead(key, plaintext).map_err(|err| Error::Crypto(err.to_string()))?;
+            let data = STANDARD
+                .decode(sealed)
+                .map_err(|err| Error::Crypto(err.to_string()))?;
+            let nonce_len = EncryptionAlgorithm::Aes256Gcm.nonce_len();
+            if data.len() < nonce_len {
+                return Err(Error::Crypto("ciphertext too short".into()));
+            }
+            let (nonce, ciphertext) = data.split_at(nonce_len);
+            Ok((nonce.to_vec(), ciphertext.to_vec()))
         }
         EncryptionAlgorithm::XChaCha20Poly1305 => {
             #[cfg(feature = "xchacha")]
             {
                 let cipher = XChaCha20Poly1305::new_from_slice(key)
                     .map_err(|_| Error::Crypto("invalid XChaCha key".into()))?;
-                let nonce = XNonce::from_slice(nonce);
+                let nonce_bytes = random_bytes(EncryptionAlgorithm::XChaCha20Poly1305.nonce_len());
+                let nonce_array: &[u8; XCHACHA_NONCE_LEN] = nonce_bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Error::Crypto("invalid XChaCha nonce length".into()))?;
+                let nonce = XNonce::from(*nonce_array);
                 cipher
-                    .encrypt(nonce, plaintext)
+                    .encrypt(&nonce, plaintext)
+                    .map(|ciphertext| (nonce_bytes, ciphertext))
                     .map_err(|_| Error::Crypto("failed to encrypt payload".into()))
             }
             #[cfg(not(feature = "xchacha"))]
@@ -175,7 +184,6 @@ fn encrypt_with_algorithm(
     }
 }
 
-#[allow(deprecated)]
 fn decrypt_with_algorithm(
     algorithm: EncryptionAlgorithm,
     key: &[u8; 32],
@@ -184,21 +192,29 @@ fn decrypt_with_algorithm(
 ) -> DecryptResult<Vec<u8>> {
     match algorithm {
         EncryptionAlgorithm::Aes256Gcm => {
-            let cipher = Aes256Gcm::new_from_slice(key)
-                .map_err(|_| DecryptError::Crypto("invalid AES key".into()))?;
-            let nonce = GenericArray::clone_from_slice(nonce);
-            cipher
-                .decrypt(&nonce, ciphertext)
-                .map_err(|_| DecryptError::MacMismatch)
+            let mut combined = Vec::with_capacity(nonce.len() + ciphertext.len());
+            combined.extend_from_slice(nonce);
+            combined.extend_from_slice(ciphertext);
+            let encoded = STANDARD.encode(combined);
+            match open_aead(key, &encoded) {
+                Ok(bytes) => Ok(bytes),
+                Err(Error::Backend(message)) if message == "open failed" => {
+                    Err(DecryptError::MacMismatch)
+                }
+                Err(err) => Err(DecryptError::Crypto(err.to_string())),
+            }
         }
         EncryptionAlgorithm::XChaCha20Poly1305 => {
             #[cfg(feature = "xchacha")]
             {
                 let cipher = XChaCha20Poly1305::new_from_slice(key)
                     .map_err(|_| DecryptError::Crypto("invalid XChaCha key".into()))?;
-                let nonce = XNonce::from_slice(nonce);
+                let nonce_array: &[u8; XCHACHA_NONCE_LEN] = nonce
+                    .try_into()
+                    .map_err(|_| DecryptError::Crypto("invalid XChaCha nonce length".into()))?;
+                let nonce = XNonce::from(*nonce_array);
                 cipher
-                    .decrypt(nonce, ciphertext)
+                    .decrypt(&nonce, ciphertext)
                     .map_err(|_| DecryptError::MacMismatch)
             }
             #[cfg(not(feature = "xchacha"))]
@@ -235,7 +251,7 @@ mod tests {
     use super::*;
     use crate::crypto::dek_cache::DekCache;
     use crate::key_provider::KeyProvider;
-    use crate::types::{ContentType, Scope, SecretMeta, Visibility};
+    use crate::spec_compat::{ContentType, Scope, SecretMeta, Visibility};
     use crate::uri::SecretUri;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;

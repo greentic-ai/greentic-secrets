@@ -8,6 +8,49 @@ The workspace provides two related entry points:
 * **HTTP/NATS broker (`secrets-broker`)** – optional control-plane surface for
   operators or cross-language clients.
 
+## Quick start
+
+| Goal | Crate | Example | Run it |
+|---|---|---|---|
+| Fetch a secret via embedded core (env/file) | `greentic-secrets-core` | `examples/embedded_fetch.rs` | `cargo run -p greentic-secrets-core --example embedded_fetch` |
+| Self-describe & validate a secret spec | `greentic-secrets-core` | `examples/describe_and_validate.rs` | `cargo run -p greentic-secrets-core --example describe_and_validate` |
+| Start the broker (HTTP/NATS) with one backend | `greentic-secrets-broker` | `examples/broker_startup.rs` | `cargo run -p greentic-secrets-broker --example broker_startup` |
+
+### Minimal embedded usage (copy-paste)
+```rust
+use greentic_secrets_core::{SecretsCore, backends::EnvBackend};
+
+fn main() {
+    let core = SecretsCore::builder()
+        .with_backend("env", EnvBackend::default())
+        .build();
+    let db_url = core.get("env:DB_URL").expect("DB_URL missing");
+    println!("DB_URL = {}", db_url.redact_preview());
+}
+```
+
+### Broker quick start (copy-paste)
+```bash
+# Minimal example — tweak ports/keys as needed
+export SECRETS_BACKEND="env"
+export RUST_LOG=info
+cargo run -p greentic-secrets-broker --example broker_startup
+```
+
+### Providers (opt-in features)
+Enable only what you deploy to:
+```toml
+# example
+greentic-secrets-core = { version = "0.1", features = ["providers-aws"] }
+
+use greentic_secrets_core::SecretsCore;
+use greentic_secrets_core::aws::ProviderAwsBackend;
+
+let core = SecretsCore::builder()
+    .with_backend("aws", ProviderAwsBackend::default())
+    .build();
+```
+
 ## Embedded usage
 
 ```rust
@@ -72,3 +115,8 @@ if !validation.missing.is_empty() {
 
 The broker remains available for HTTP and NATS workflows. Build it with the
 backend features you need and run it alongside your existing infrastructure.
+
+### Releasing
+- Bump versions via conventional commits or `cargo set-version`.
+- Tag the repo: `git tag v0.1.2 && git push --tags`
+- CI publishes changed crates in correct order and creates a GitHub Release.

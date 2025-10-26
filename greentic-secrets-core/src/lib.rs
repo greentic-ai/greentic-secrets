@@ -13,6 +13,7 @@ pub mod probe;
 pub mod provider;
 pub mod resolver;
 pub mod spec;
+pub mod spec_compat;
 pub mod spec_registry;
 pub mod spec_schema;
 pub mod spec_validate;

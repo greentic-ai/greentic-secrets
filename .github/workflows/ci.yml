@@ -32,3 +32,6 @@ jobs:
 
       - name: Cargo build
         run: cargo build --workspace --release
+
+      - name: Cargo build (use_spec feature)
+        run: cargo build --workspace --features use_spec

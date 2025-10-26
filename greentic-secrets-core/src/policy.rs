@@ -1,4 +1,4 @@
-use crate::types::{Scope, SecretMeta, Visibility};
+use crate::spec_compat::{Scope, SecretMeta, Visibility};
 use crate::{errors::Result, types::validate_component};
 use serde::{Deserialize, Serialize};
 
@@ -125,7 +125,7 @@ enum Action {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ContentType;
+    use crate::spec_compat::ContentType;
     use crate::uri::SecretUri;
 
     fn build_meta(scope: Scope, visibility: Visibility) -> SecretMeta {

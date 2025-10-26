@@ -7,12 +7,12 @@
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use greentic_secrets_spec::prelude::*;
+use greentic_secrets_spec::{
+    Scope, SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
+};
+use greentic_secrets_support::KeyProvider;
 use rand::{rng, Rng};
-use secrets_core::backend::{SecretVersion, SecretsBackend, VersionedSecret};
-use secrets_core::errors::{Error as CoreError, Result as CoreResult};
-use secrets_core::key_provider::KeyProvider;
-use secrets_core::types::{Envelope, SecretListItem, SecretMeta, SecretRecord};
-use secrets_core::uri::SecretUri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -61,13 +61,13 @@ impl GcpSecretsBackend {
         )
     }
 
-    fn matches_scope(name: &str, scope: &secrets_core::types::Scope) -> bool {
+    fn matches_scope(name: &str, scope: &Scope) -> bool {
         name.contains(scope.env()) && name.contains(scope.tenant())
     }
 }
 
 impl SecretsBackend for GcpSecretsBackend {
-    fn put(&self, record: SecretRecord) -> CoreResult<SecretVersion> {
+    fn put(&self, record: SecretRecord) -> SecretsResult<SecretVersion> {
         let mut guard = self.store.lock().unwrap();
         let name = self.secret_name(&record.meta.uri);
         let entry = guard.entry(name).or_default();
@@ -79,7 +79,7 @@ impl SecretsBackend for GcpSecretsBackend {
         })
     }
 
-    fn get(&self, uri: &SecretUri, version: Option<u64>) -> CoreResult<Option<VersionedSecret>> {
+    fn get(&self, uri: &SecretUri, version: Option<u64>) -> SecretsResult<Option<VersionedSecret>> {
         let guard = self.store.lock().unwrap();
         let entry = match guard.get(&self.secret_name(uri)) {
             Some(v) => v,
@@ -97,10 +97,10 @@ impl SecretsBackend for GcpSecretsBackend {
 
     fn list(
         &self,
-        scope: &secrets_core::types::Scope,
+        scope: &Scope,
         category_prefix: Option<&str>,
         name_prefix: Option<&str>,
-    ) -> CoreResult<Vec<SecretListItem>> {
+    ) -> SecretsResult<Vec<SecretListItem>> {
         let guard = self.store.lock().unwrap();
         let mut items = Vec::new();
         for (name, versions) in guard.iter() {
@@ -131,11 +131,11 @@ impl SecretsBackend for GcpSecretsBackend {
         Ok(items)
     }
 
-    fn delete(&self, uri: &SecretUri) -> CoreResult<SecretVersion> {
+    fn delete(&self, uri: &SecretUri) -> SecretsResult<SecretVersion> {
         let mut guard = self.store.lock().unwrap();
         let entry = guard
             .get_mut(&self.secret_name(uri))
-            .ok_or_else(|| CoreError::Storage("secret does not exist".into()))?;
+            .ok_or_else(|| SecretsError::Storage("secret does not exist".into()))?;
         let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
         entry.push(StoredSecret {
             version: next_version,
@@ -148,7 +148,7 @@ impl SecretsBackend for GcpSecretsBackend {
         })
     }
 
-    fn versions(&self, uri: &SecretUri) -> CoreResult<Vec<SecretVersion>> {
+    fn versions(&self, uri: &SecretUri) -> SecretsResult<Vec<SecretVersion>> {
         let guard = self.store.lock().unwrap();
         Ok(guard
             .get(&self.secret_name(uri))
@@ -162,7 +162,7 @@ impl SecretsBackend for GcpSecretsBackend {
             .collect())
     }
 
-    fn exists(&self, uri: &SecretUri) -> CoreResult<bool> {
+    fn exists(&self, uri: &SecretUri) -> SecretsResult<bool> {
         let guard = self.store.lock().unwrap();
         Ok(guard
             .get(&self.secret_name(uri))
@@ -201,26 +201,22 @@ impl GcpKmsKeyProvider {
 }
 
 impl KeyProvider for GcpKmsKeyProvider {
-    fn wrap_dek(&self, scope: &secrets_core::types::Scope, dek: &[u8]) -> CoreResult<Vec<u8>> {
+    fn wrap_dek(&self, scope: &Scope, dek: &[u8]) -> SecretsResult<Vec<u8>> {
         let alias = self
             .config
             .kms_keys
             .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| CoreError::Crypto("missing KMS key".into()))?;
+            .ok_or_else(|| SecretsError::Crypto("missing KMS key".into()))?;
         let kek = self.get_or_create_kek(alias);
         Ok(xor(&kek, dek))
     }
 
-    fn unwrap_dek(
-        &self,
-        scope: &secrets_core::types::Scope,
-        wrapped: &[u8],
-    ) -> CoreResult<Vec<u8>> {
+    fn unwrap_dek(&self, scope: &Scope, wrapped: &[u8]) -> SecretsResult<Vec<u8>> {
         let alias = self
             .config
             .kms_keys
             .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| CoreError::Crypto("missing KMS key".into()))?;
+            .ok_or_else(|| SecretsError::Crypto("missing KMS key".into()))?;
         let kek = self.get_or_create_kek(alias);
         Ok(xor(&kek, wrapped))
     }
@@ -233,10 +229,10 @@ fn xor(kek: &[u8], data: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-fn decode_bytes(input: &str) -> CoreResult<Vec<u8>> {
+fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
     STANDARD
         .decode(input.as_bytes())
-        .map_err(|err| CoreError::Storage(err.to_string()))
+        .map_err(|err| SecretsError::Storage(err.to_string()))
 }
 
 #[derive(Clone, Debug)]
@@ -325,7 +321,7 @@ struct StoredSecret {
 }
 
 impl StoredSecret {
-    fn from_record(record: &SecretRecord, deleted: bool) -> CoreResult<Self> {
+    fn from_record(record: &SecretRecord, deleted: bool) -> SecretsResult<Self> {
         Ok(Self {
             version: 0,
             deleted,
@@ -338,7 +334,7 @@ impl StoredSecret {
         self
     }
 
-    fn into_versioned(self) -> CoreResult<VersionedSecret> {
+    fn into_versioned(self) -> SecretsResult<VersionedSecret> {
         if self.deleted {
             return Ok(VersionedSecret {
                 version: self.version,
@@ -348,7 +344,7 @@ impl StoredSecret {
         }
         let record = self
             .record
-            .ok_or_else(|| CoreError::Storage("missing record".into()))?
+            .ok_or_else(|| SecretsError::Storage("missing record".into()))?
             .into_record()?;
         Ok(VersionedSecret {
             version: self.version,
@@ -357,13 +353,13 @@ impl StoredSecret {
         })
     }
 
-    fn into_list_item(self) -> CoreResult<Option<SecretListItem>> {
+    fn into_list_item(self) -> SecretsResult<Option<SecretListItem>> {
         if self.deleted {
             return Ok(None);
         }
         let record = self
             .record
-            .ok_or_else(|| CoreError::Storage("missing record".into()))?;
+            .ok_or_else(|| SecretsError::Storage("missing record".into()))?;
         Ok(Some(SecretListItem::from_meta(
             &record.meta,
             Some(self.version.to_string()),
@@ -379,7 +375,7 @@ struct StoredRecord {
 }
 
 impl StoredRecord {
-    fn from_record(record: &SecretRecord) -> CoreResult<Self> {
+    fn from_record(record: &SecretRecord) -> SecretsResult<Self> {
         Ok(Self {
             meta: record.meta.clone(),
             envelope: StoredEnvelope::from_envelope(&record.envelope),
@@ -387,7 +383,7 @@ impl StoredRecord {
         })
     }
 
-    fn into_record(self) -> CoreResult<SecretRecord> {
+    fn into_record(self) -> SecretsResult<SecretRecord> {
         Ok(SecretRecord::new(
             self.meta,
             decode_bytes(&self.value)?,
@@ -414,12 +410,12 @@ impl StoredEnvelope {
         }
     }
 
-    fn into_envelope(self) -> CoreResult<Envelope> {
+    fn into_envelope(self) -> SecretsResult<Envelope> {
         Ok(Envelope {
             algorithm: self
                 .algorithm
                 .parse()
-                .map_err(|_| CoreError::Storage("invalid algorithm".into()))?,
+                .map_err(|_| SecretsError::Storage("invalid algorithm".into()))?,
             nonce: decode_bytes(&self.nonce)?,
             hkdf_salt: decode_bytes(&self.hkdf_salt)?,
             wrapped_dek: decode_bytes(&self.wrapped_dek)?,
@@ -430,7 +426,7 @@ impl StoredEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrets_core::types::{ContentType, Scope, Visibility};
+    use greentic_secrets_spec::{ContentType, EncryptionAlgorithm, Scope, Visibility};
 
     fn build_record() -> SecretRecord {
         let scope = Scope::new("staging", "payments", None).unwrap();
@@ -438,7 +434,7 @@ mod tests {
         let mut meta = SecretMeta::new(uri, Visibility::Tenant, ContentType::Json);
         meta.description = Some("test secret".into());
         let envelope = Envelope {
-            algorithm: secrets_core::types::EncryptionAlgorithm::Aes256Gcm,
+            algorithm: EncryptionAlgorithm::Aes256Gcm,
             nonce: vec![1, 2, 3],
             hkdf_salt: vec![4, 5, 6],
             wrapped_dek: vec![7, 8, 9],

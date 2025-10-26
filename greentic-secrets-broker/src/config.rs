@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use secrets_core::backend::SecretsBackend;
 use secrets_core::key_provider::KeyProvider;
 
@@ -19,7 +19,7 @@ pub async fn load_backend_components() -> Result<BackendComponents> {
 
             #[cfg(not(feature = "aws-sm"))]
             {
-                bail!("aws backend requested but aws-sm feature is not enabled");
+                anyhow::bail!("aws backend requested but aws-sm feature is not enabled");
             }
         }
         "gcp" => {
@@ -30,7 +30,7 @@ pub async fn load_backend_components() -> Result<BackendComponents> {
 
             #[cfg(not(feature = "gcp-sm"))]
             {
-                bail!("gcp backend requested but gcp-sm feature is not enabled");
+                anyhow::bail!("gcp backend requested but gcp-sm feature is not enabled");
             }
         }
         "azure" => {
@@ -41,7 +41,7 @@ pub async fn load_backend_components() -> Result<BackendComponents> {
 
             #[cfg(not(feature = "azure-kv"))]
             {
-                bail!("azure backend requested but azure-kv feature is not enabled");
+                anyhow::bail!("azure backend requested but azure-kv feature is not enabled");
             }
         }
         "k8s" => {
@@ -52,7 +52,7 @@ pub async fn load_backend_components() -> Result<BackendComponents> {
 
             #[cfg(not(feature = "k8s"))]
             {
-                bail!("k8s backend requested but k8s feature is not enabled");
+                anyhow::bail!("k8s backend requested but k8s feature is not enabled");
             }
         }
         "vault" => {
@@ -63,7 +63,7 @@ pub async fn load_backend_components() -> Result<BackendComponents> {
 
             #[cfg(not(feature = "vault-kv"))]
             {
-                bail!("vault backend requested but vault-kv feature is not enabled");
+                anyhow::bail!("vault backend requested but vault-kv feature is not enabled");
             }
         }
         other => Err(anyhow!("unsupported backend `{other}`")),

@@ -1,12 +1,12 @@
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
 use fs2::FileExt;
+use greentic_secrets_spec::{
+    Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
+    SecretsError as Error, SecretsResult as Result, VersionedSecret,
+};
+use greentic_secrets_support::KeyProvider;
 use parking_lot::RwLock;
-use secrets_core::errors::{Error, Result};
-use secrets_core::key_provider::KeyProvider;
-use secrets_core::types::{Scope, SecretListItem, SecretRecord};
-use secrets_core::uri::SecretUri;
-use secrets_core::{SecretVersion, SecretsBackend, VersionedSecret};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -432,23 +432,10 @@ impl SecretsBackend for DevBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrets_core::crypto::dek_cache::DekCache;
-    use secrets_core::crypto::envelope::EnvelopeService;
-    use secrets_core::types::{ContentType, EncryptionAlgorithm, SecretMeta, Visibility};
-    use secrets_core::SecretsBroker;
+    use greentic_secrets_spec::{
+        ContentType, EncryptionAlgorithm, Envelope, SecretMeta, Visibility,
+    };
     use serde_json::json;
-    use std::time::Duration;
-
-    fn broker() -> SecretsBroker<DevBackend, DevKeyProvider> {
-        let backend = DevBackend::new();
-        let provider = DevKeyProvider::default();
-        let crypto = EnvelopeService::new(
-            provider.clone(),
-            DekCache::new(64, Duration::from_secs(300)),
-            EncryptionAlgorithm::Aes256Gcm,
-        );
-        SecretsBroker::new(backend, crypto)
-    }
 
     fn sample_scope() -> Scope {
         Scope::new("dev", "acme", Some("payments".into())).unwrap()
@@ -458,138 +445,157 @@ mod tests {
         SecretUri::new(scope.clone(), category, name).unwrap()
     }
 
+    fn record(uri: &SecretUri, content_type: ContentType, payload: Vec<u8>) -> SecretRecord {
+        let meta = SecretMeta::new(uri.clone(), Visibility::Team, content_type);
+        let envelope = Envelope {
+            algorithm: EncryptionAlgorithm::Aes256Gcm,
+            nonce: Vec::new(),
+            hkdf_salt: Vec::new(),
+            wrapped_dek: Vec::new(),
+        };
+        SecretRecord::new(meta, payload, envelope)
+    }
+
     #[test]
-    fn put_get_latest_and_versioned() {
-        let mut broker = broker();
+    fn backend_put_get_latest_and_versioned() {
+        let backend = DevBackend::new();
         let scope = sample_scope();
         let uri = sample_uri(&scope, "kv", "db-password");
 
-        let meta = SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Json);
-        let payload = serde_json::to_vec(&json!({"password": "s3cr3t"})).unwrap();
-        let v1 = broker.put_secret(meta, &payload).unwrap();
+        let payload_v1 = serde_json::to_vec(&json!({"password": "s3cr3t"})).unwrap();
+        let v1 = backend
+            .put(record(&uri, ContentType::Json, payload_v1.clone()))
+            .unwrap();
         assert_eq!(v1.version, 1);
 
-        let latest = broker.get_secret(&uri).unwrap().expect("latest");
+        let latest = backend.get(&uri, None).unwrap().expect("latest record");
         assert_eq!(latest.version, 1);
-        assert_eq!(latest.payload, payload);
-        assert_eq!(latest.meta.content_type, ContentType::Json);
+        let stored = latest.record.expect("record payload");
+        assert_eq!(stored.value, payload_v1);
+        assert_eq!(stored.meta.content_type, ContentType::Json);
 
-        let meta2 = SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Json);
-        let payload2 = serde_json::to_vec(&json!({"password": "n3w"})).unwrap();
-        let v2 = broker.put_secret(meta2, &payload2).unwrap();
+        let payload_v2 = serde_json::to_vec(&json!({"password": "n3w"})).unwrap();
+        let v2 = backend
+            .put(record(&uri, ContentType::Json, payload_v2.clone()))
+            .unwrap();
         assert_eq!(v2.version, 2);
 
-        let latest = broker.get_secret(&uri).unwrap().expect("latest");
+        let latest = backend.get(&uri, None).unwrap().expect("latest record");
         assert_eq!(latest.version, 2);
-        assert_eq!(latest.payload, payload2);
+        let stored = latest.record.expect("record payload");
+        assert_eq!(stored.value, payload_v2);
 
-        let version_one = broker
-            .get_secret_version(&uri, Some(1))
-            .unwrap()
-            .expect("v1");
+        let version_one = backend.get(&uri, Some(1)).unwrap().expect("v1 record");
         assert_eq!(version_one.version, 1);
-        assert_eq!(version_one.payload, payload);
+        let stored = version_one.record.expect("record payload");
+        assert_eq!(
+            stored.value,
+            serde_json::to_vec(&json!({"password": "s3cr3t"})).unwrap()
+        );
     }
 
     #[test]
     fn list_with_prefix() {
-        let mut broker = broker();
+        let backend = DevBackend::new();
         let scope = sample_scope();
         let uri_api = sample_uri(&scope, "kv", "api-token");
         let uri_db = sample_uri(&scope, "kv", "db-password");
         let uri_cfg = sample_uri(&scope, "config", "feature-flags");
 
-        broker
-            .put_secret(
-                SecretMeta::new(uri_api.clone(), Visibility::Team, ContentType::Opaque),
-                b"api".as_ref(),
-            )
+        backend
+            .put(record(&uri_api, ContentType::Opaque, b"api".to_vec()))
+            .unwrap();
+        backend
+            .put(record(&uri_db, ContentType::Text, b"db".to_vec()))
+            .unwrap();
+        backend
+            .put(record(
+                &uri_cfg,
+                ContentType::Json,
+                serde_json::to_vec(&json!({"feature": true})).unwrap(),
+            ))
             .unwrap();
 
-        broker
-            .put_secret(
-                SecretMeta::new(uri_db.clone(), Visibility::Team, ContentType::Text),
-                b"db".as_ref(),
-            )
-            .unwrap();
-
-        broker
-            .put_secret(
-                SecretMeta::new(uri_cfg.clone(), Visibility::Team, ContentType::Json),
-                serde_json::to_vec(&json!({"feature": true}))
-                    .unwrap()
-                    .as_slice(),
-            )
-            .unwrap();
-
-        let kv = broker.list_secrets(&scope, Some("kv"), None).unwrap();
+        let kv = backend.list(&scope, Some("kv"), None).unwrap();
         assert_eq!(kv.len(), 2);
 
-        let api_only = broker
-            .list_secrets(&scope, Some("kv"), Some("api"))
-            .unwrap();
+        let api_only = backend.list(&scope, Some("kv"), Some("api")).unwrap();
         assert_eq!(api_only.len(), 1);
         assert!(api_only[0].uri.to_string().contains("api-token"));
     }
 
     #[test]
     fn delete_and_restore() {
-        let mut broker = broker();
+        let backend = DevBackend::new();
         let scope = sample_scope();
         let uri = sample_uri(&scope, "kv", "session-key");
 
-        broker
-            .put_secret(
-                SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Binary),
-                b"\x01\x02\x03",
-            )
+        backend
+            .put(record(&uri, ContentType::Binary, vec![0x01, 0x02, 0x03]))
             .unwrap();
 
-        assert!(broker.exists(&uri).unwrap());
-        broker.delete_secret(&uri).unwrap();
-        assert!(!broker.exists(&uri).unwrap());
-        assert!(broker.get_secret(&uri).unwrap().is_none());
+        assert!(backend.exists(&uri).unwrap());
+        backend.delete(&uri).unwrap();
+        assert!(!backend.exists(&uri).unwrap());
+        assert!(backend.get(&uri, None).unwrap().is_none());
 
-        broker
-            .put_secret(
-                SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Binary),
-                b"\xAA\xBB",
-            )
+        backend
+            .put(record(&uri, ContentType::Binary, vec![0xAA, 0xBB]))
             .unwrap();
 
-        let latest = broker.get_secret(&uri).unwrap().expect("restored");
-        assert_eq!(latest.payload, b"\xAA\xBB");
-        assert!(broker.exists(&uri).unwrap());
+        let latest = backend.get(&uri, None).unwrap().expect("restored");
+        let record = latest.record.expect("record payload");
+        assert_eq!(record.value, vec![0xAA, 0xBB]);
+        assert!(backend.exists(&uri).unwrap());
     }
 
     #[test]
     fn content_types_round_trip() {
-        let mut broker = broker();
+        let backend = DevBackend::new();
         let scope = sample_scope();
 
         let text_uri = sample_uri(&scope, "kv", "text");
         let bin_uri = sample_uri(&scope, "kv", "bin");
 
-        broker
-            .put_secret(
-                SecretMeta::new(text_uri.clone(), Visibility::Team, ContentType::Text),
-                "hello world".as_bytes(),
-            )
+        backend
+            .put(record(
+                &text_uri,
+                ContentType::Text,
+                b"hello world".to_vec(),
+            ))
+            .unwrap();
+        backend
+            .put(record(&bin_uri, ContentType::Binary, vec![0, 1, 2, 3]))
             .unwrap();
 
-        broker
-            .put_secret(
-                SecretMeta::new(bin_uri.clone(), Visibility::Team, ContentType::Binary),
-                &[0u8, 1, 2, 3],
-            )
+        let text_record = backend
+            .get(&text_uri, None)
+            .unwrap()
+            .unwrap()
+            .record
             .unwrap();
+        assert_eq!(text_record.meta.content_type, ContentType::Text);
+        assert_eq!(text_record.value, b"hello world".to_vec());
 
-        let text = broker.get_secret(&text_uri).unwrap().unwrap();
-        assert_eq!(text.content_type(), ContentType::Text);
-        assert_eq!(text.payload, b"hello world");
+        let bin_record = backend
+            .get(&bin_uri, None)
+            .unwrap()
+            .unwrap()
+            .record
+            .unwrap();
+        assert_eq!(bin_record.meta.content_type, ContentType::Binary);
+        assert_eq!(bin_record.value, vec![0, 1, 2, 3]);
+    }
 
-        let bin = broker.get_secret(&bin_uri).unwrap().unwrap();
-        assert_eq!(bin.content_type(), ContentType::Binary);
-        assert_eq!(bin.payload, vec![0, 1, 2, 3]);
+    #[test]
+    fn key_provider_wrap_unwrap() {
+        let provider = DevKeyProvider::from_material(b"material");
+        let scope = sample_scope();
+        let dek = vec![1, 2, 3, 4, 5];
+        let wrapped = provider.wrap_dek(&scope, &dek).unwrap();
+        assert_eq!(wrapped.len(), dek.len());
+        assert_ne!(wrapped, dek);
+        let unwrapped = provider.unwrap_dek(&scope, &wrapped).unwrap();
+        assert_eq!(unwrapped, dek);
     }
 }
