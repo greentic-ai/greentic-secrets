@@ -825,7 +825,6 @@ dependencies = [
  "greentic-secrets-provider-k8s",
  "greentic-secrets-provider-vault-kv",
  "greentic-secrets-spec",
- "greentic-secrets-support",
 ]
 
 [[package]]
@@ -853,7 +852,6 @@ dependencies = [
  "greentic-secrets-provider-gcp-sm",
  "greentic-secrets-provider-k8s",
  "greentic-secrets-provider-vault-kv",
- "greentic-secrets-wit",
  "hyper",
  "jsonwebtoken",
  "opentelemetry",
@@ -882,7 +880,6 @@ dependencies = [
  "anyhow",
  "greentic-secrets-provider-dev",
  "greentic-secrets-spec",
- "greentic-secrets-support",
  "tokio",
 ]
 
@@ -897,12 +894,12 @@ dependencies = [
  "futures",
  "greentic-secrets-api",
  "greentic-secrets-spec",
- "greentic-secrets-support",
  "hkdf",
  "lru",
  "once_cell",
  "rand 0.9.2",
  "reqwest",
+ "ring",
  "schemars",
  "serde",
  "serde_json",
@@ -922,7 +919,6 @@ dependencies = [
  "async-trait",
  "base64",
  "greentic-secrets-spec",
- "greentic-secrets-support",
  "rand 0.9.2",
  "serde",
 ]
@@ -935,7 +931,6 @@ dependencies = [
  "async-trait",
  "base64",
  "greentic-secrets-spec",
- "greentic-secrets-support",
  "rsa",
  "serde",
  "serde_json",
@@ -949,7 +944,6 @@ dependencies = [
  "base64",
  "fs2",
  "greentic-secrets-spec",
- "greentic-secrets-support",
  "parking_lot",
  "serde",
  "serde_json",
@@ -965,7 +959,6 @@ dependencies = [
  "async-trait",
  "base64",
  "greentic-secrets-spec",
- "greentic-secrets-support",
  "rand 0.9.2",
  "serde",
 ]
@@ -978,7 +971,6 @@ dependencies = [
  "async-trait",
  "base64",
  "greentic-secrets-spec",
- "greentic-secrets-support",
  "rand 0.9.2",
  "serde",
  "tracing",
@@ -992,27 +984,9 @@ dependencies = [
  "async-trait",
  "base64",
  "greentic-secrets-spec",
- "greentic-secrets-support",
  "rand 0.9.2",
  "serde",
  "tracing",
-]
-
-[[package]]
-name = "greentic-secrets-sdk"
-version = "0.1.3"
-dependencies = [
- "anyhow",
- "async-nats",
- "base64",
- "greentic-secrets-core",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1024,26 +998,6 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "time",
-]
-
-[[package]]
-name = "greentic-secrets-support"
-version = "0.1.3"
-dependencies = [
- "async-trait",
- "base64",
- "greentic-secrets-spec",
- "ring",
- "serde",
- "time",
-]
-
-[[package]]
-name = "greentic-secrets-wit"
-version = "0.1.3"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

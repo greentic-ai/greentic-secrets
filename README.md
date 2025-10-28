@@ -41,29 +41,38 @@ cargo run -p greentic-secrets-broker --example broker_startup
 Enable only what you deploy to:
 
 ```toml
-# Direct dependency on the core crate
-greentic-secrets-core = { version = "0.1", features = ["providers-aws"] }
+# Direct dependency on the core crate plus a provider
+greentic-secrets-core = "0.1"
+greentic-secrets-provider-dev = "0.1"
 
 # Or via the umbrella crate re-exports
-greentic-secrets = { version = "0.1", features = ["providers-aws"] }
+greentic-secrets = { version = "0.1", features = ["providers-dev"] }
 ```
 
 ```rust
-// Direct core import
+// Direct core + provider crates
 use greentic_secrets_core::SecretsCore;
-use greentic_secrets_core::aws::ProviderAwsBackend;
+use greentic_secrets_provider_dev_env::DevBackend;
 
+# tokio::runtime::Runtime::new().unwrap().block_on(async {
 let core = SecretsCore::builder()
-    .with_backend("aws", ProviderAwsBackend::default())
-    .build();
+    .with_backend("dev-env", DevBackend::new())
+    .build()
+    .await
+    .unwrap();
+# });
 
 // Umbrella crate re-export
 use greentic_secrets::core::SecretsCore as UmbrellaCore;
-use greentic_secrets::aws::ProviderAwsBackend as UmbrellaAwsBackend;
+use greentic_secrets::dev::DevBackend as UmbrellaDevBackend;
 
+# tokio::runtime::Runtime::new().unwrap().block_on(async {
 let umbrella_core = UmbrellaCore::builder()
-    .with_backend("aws", UmbrellaAwsBackend::default())
-    .build();
+    .with_backend("dev-env", UmbrellaDevBackend::new())
+    .build()
+    .await
+    .unwrap();
+# });
 ```
 
 ## Embedded usage

@@ -1,4 +1,7 @@
-use greentic_secrets_spec::{Scope, SecretsResult};
+use crate::{Scope, SecretsResult};
+#[cfg(not(feature = "std"))]
+use alloc::sync::Arc;
+#[cfg(feature = "std")]
 use std::sync::Arc;
 
 /// Trait implemented by key providers responsible for wrapping and unwrapping DEKs.

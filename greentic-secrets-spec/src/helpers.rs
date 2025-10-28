@@ -1,4 +1,4 @@
-use greentic_secrets_spec::{
+use crate::{
     ContentType, EncryptionAlgorithm, Envelope, Scope, SecretMeta, SecretRecord, SecretUri,
     Visibility,
 };
@@ -29,18 +29,18 @@ pub fn with_ttl(mut record: SecretRecord, seconds: i64) -> SecretRecord {
     record
 }
 
-fn record_from_bytes(bytes: Vec<u8>) -> SecretRecord {
+pub fn record_from_bytes(bytes: Vec<u8>) -> SecretRecord {
     SecretRecord::new(default_meta(), bytes, default_envelope())
 }
 
-fn default_uri() -> SecretUri {
+pub fn default_uri() -> SecretUri {
     let scope = Scope::new(DEFAULT_ENV, DEFAULT_TENANT, None)
-        .expect("default scope for greentic-secrets-support");
+        .expect("default scope for greentic-secrets-spec helpers");
     SecretUri::new(scope, DEFAULT_CATEGORY, DEFAULT_NAME)
-        .expect("default uri for greentic-secrets-support")
+        .expect("default uri for greentic-secrets-spec helpers")
 }
 
-fn default_envelope() -> Envelope {
+pub fn default_envelope() -> Envelope {
     Envelope {
         algorithm: EncryptionAlgorithm::default(),
         nonce: Vec::new(),
@@ -49,13 +49,13 @@ fn default_envelope() -> Envelope {
     }
 }
 
-fn stamp_created(meta: &mut SecretMeta) {
+pub fn stamp_created(meta: &mut SecretMeta) {
     let timestamp = OffsetDateTime::now_utc().unix_timestamp();
     meta.set_tag("created_at", timestamp.to_string());
     meta.set_tag("updated_at", timestamp.to_string());
 }
 
-fn stamp_updated(meta: &mut SecretMeta) {
+pub fn stamp_updated(meta: &mut SecretMeta) {
     let timestamp = OffsetDateTime::now_utc().unix_timestamp();
     meta.set_tag("updated_at", timestamp.to_string());
 }

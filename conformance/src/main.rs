@@ -15,9 +15,9 @@ mod tests {
     pub async fn run_dev() -> Result<()> {
         use greentic_secrets_provider_dev::DevBackend;
         use greentic_secrets_spec::{
-            ContentType, Scope, SecretUri, SecretVersion, SecretsBackend, SecretsError, Visibility,
+            record_from_plain, ContentType, Scope, SecretUri, SecretVersion, SecretsBackend,
+            SecretsError, Visibility,
         };
-        use greentic_secrets_support::constructors::record_from_plain;
 
         let backend = DevBackend::new();
 

@@ -11,9 +11,8 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use greentic_secrets_spec::prelude::*;
 use greentic_secrets_spec::{
-    Scope, SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
+    KeyProvider, Scope, SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
 };
-use greentic_secrets_support::KeyProvider;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

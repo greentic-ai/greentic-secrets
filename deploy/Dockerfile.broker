@@ -3,10 +3,8 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY rust-toolchain.toml rust-toolchain.toml
-COPY secrets-core/Cargo.toml secrets-core/Cargo.toml
-COPY secrets-broker/Cargo.toml secrets-broker/Cargo.toml
-COPY secrets-wit/Cargo.toml secrets-wit/Cargo.toml
-COPY secrets-sdk/Cargo.toml secrets-sdk/Cargo.toml
+COPY greentic-secrets-core/Cargo.toml greentic-secrets-core/Cargo.toml
+COPY greentic-secrets-broker/Cargo.toml greentic-secrets-broker/Cargo.toml
 COPY providers providers
 
 COPY . .

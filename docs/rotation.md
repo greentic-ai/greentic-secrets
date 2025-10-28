@@ -4,7 +4,7 @@ Greentic supports continuous rotation by combining TTL metadata, cache
 invalidation, and version-aware retrieval.
 
 1. **Plan rotation frequency** – set TTL tags (for example with
-   `with_ttl(record, seconds)` from `greentic-secrets-support`) to describe when
+   `with_ttl(record, seconds)` from `greentic-secrets-spec`) to describe when
    a secret should be refreshed. The embedded runtime and broker can honour
    these tags when issuing rotation jobs.
 2. **Publish the new value** – write an updated `SecretRecord` using the core

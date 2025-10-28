@@ -11,7 +11,6 @@ use crate::spec_compat::{
 use async_nats;
 #[cfg(feature = "nats")]
 use futures::StreamExt;
-use greentic_secrets_support::parse as parse_key;
 use lru::LruCache;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -473,7 +472,7 @@ impl SecretsCore {
     }
 
     fn parse_uri(&self, uri: &str) -> Result<SecretUri, SecretsError> {
-        Ok(parse_key(uri)?)
+        Ok(SecretUri::parse(uri)?)
     }
 
     fn cached_value(&self, uri: &SecretUri) -> Option<Vec<u8>> {

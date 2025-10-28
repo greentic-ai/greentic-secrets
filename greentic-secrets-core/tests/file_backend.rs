@@ -1,6 +1,6 @@
 #![cfg(feature = "file")]
 
-use greentic_secrets_support::{record_from_plain, with_ttl};
+use greentic_secrets_spec::{record_from_plain, with_ttl};
 use secrets_core::backend::file::FileBackend;
 use secrets_core::types::{ContentType, Envelope, SecretMeta, SecretRecord, Visibility};
 use secrets_core::SecretUri;

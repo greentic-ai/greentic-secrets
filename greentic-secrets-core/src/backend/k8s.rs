@@ -96,7 +96,7 @@ fn sanitize(input: &str) -> String {
 mod tests {
     use super::*;
     use crate::spec_compat::{ContentType, Envelope, SecretMeta, Visibility};
-    use greentic_secrets_support::{record_from_plain, with_ttl};
+    use greentic_secrets_spec::{record_from_plain, with_ttl};
 
     fn sample_uri(team: Option<&str>) -> SecretUri {
         let scope = Scope::new("prod", "tenant", team.map(|t| t.to_string())).unwrap();

@@ -12,8 +12,10 @@ categories = ["config", "authentication", "cryptography"]
 include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [features]
-default = ["use_spec"]
+default = ["use_spec", "crypto-ring"]
 use_spec = []
+crypto-ring = ["dep:ring"]
+crypto-none = []
 env = []
 file = []
 k8s = []
@@ -22,7 +24,7 @@ gcp = []
 azure = []
 imds = ["dep:reqwest"]
 nats = ["dep:async-nats", "dep:futures", "tokio"]
-schema = ["schemars", "greentic-secrets-spec/schema"]
+schema = ["schemars", "greentic_secrets_spec/schema"]
 
 xchacha = ["chacha20poly1305"]
 
@@ -41,9 +43,9 @@ async-nats = { version = "0.44.2", optional = true }
 futures = { version = "0.3", optional = true }
 reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls"], optional = true }
 tracing = { workspace = true }
-greentic-secrets-api = { path = "../greentic-secrets-api", version = "=0.1.3" }
-greentic-secrets-spec = { path = "../greentic-secrets-spec", version = "=0.1.3" }
-greentic-secrets-support = { path = "../greentic-secrets-support", version = "=0.1.3" }
+greentic_secrets_api = { workspace = true }
+greentic_secrets_spec = { workspace = true }
+ring = { version = "0.17", optional = true }
 
 [dependencies.chacha20poly1305]
 version = "0.10"

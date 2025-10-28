@@ -98,7 +98,7 @@ fn sanitize_segment(input: &str) -> String {
 mod tests {
     use super::*;
     use crate::spec_compat::{ContentType, Envelope, SecretMeta, Visibility};
-    use greentic_secrets_support::{record_from_plain, with_ttl};
+    use greentic_secrets_spec::{record_from_plain, with_ttl};
 
     fn sample_record(uri: SecretUri) -> SecretRecord {
         let mut record = record_from_plain(r#"{"token":"value"}"#);

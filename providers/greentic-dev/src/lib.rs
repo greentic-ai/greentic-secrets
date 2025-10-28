@@ -2,10 +2,9 @@ use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
 use fs2::FileExt;
 use greentic_secrets_spec::{
-    Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
+    KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
     SecretsError as Error, SecretsResult as Result, VersionedSecret,
 };
-use greentic_secrets_support::KeyProvider;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

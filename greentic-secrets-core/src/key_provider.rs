@@ -1,1 +1,1 @@
-pub use greentic_secrets_support::KeyProvider;
+pub use greentic_secrets_spec::KeyProvider;
