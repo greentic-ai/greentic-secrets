@@ -9,6 +9,7 @@ async fn main() -> Result<()> {
 }
 
 mod tests {
+    use anyhow::Result;
 
     #[cfg(feature = "provider-dev")]
     pub async fn run_dev() -> Result<()> {
