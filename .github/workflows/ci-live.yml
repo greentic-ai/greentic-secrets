@@ -1,0 +1,80 @@
+name: CI Live Providers
+on:
+  pull_request:
+    types: [labeled, opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Run paid live cloud tests"
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  aws:
+    if: >
+      (github.event_name == 'push') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'live-cloud-tests')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.confirm == true)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Configure AWS OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Live conformance (AWS)
+        env:
+          GTS_REGION: ${{ vars.AWS_REGION }}
+          GTS_PREFIX: gtc_${{ github.run_id }}
+        run: cargo run -p greentic-secrets-conformance --features provider-aws
+
+  azure:
+    needs: [aws]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Live conformance (Azure KV)
+        env:
+          GTS_AZURE_KV: ${{ vars.AZURE_KV_NAME }}
+          GTS_PREFIX: gtc-${{ github.run_id }}
+        run: cargo run -p greentic-secrets-conformance --features provider-azure
+
+  gcp:
+    needs: [aws]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - name: Live conformance (GCP SM)
+        env:
+          GTS_GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GTS_PREFIX: gtc-${{ github.run_id }}
+        run: cargo run -p greentic-secrets-conformance --features provider-gcp

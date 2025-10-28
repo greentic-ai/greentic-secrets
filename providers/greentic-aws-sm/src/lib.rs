@@ -1,84 +1,382 @@
-//! Simplified AWS Secrets Manager backend implementation.
-//!
-//! This module provides an implementation of [`SecretsBackend`] and
-//! [`KeyProvider`] that mimics the behaviour of AWS Secrets Manager and KMS
-//! using in-memory data structures. It honours configuration such as secret
-//! prefixes and per-environment KMS aliases, making it suitable for tests and
-//! local development when the real services are not available.
-
-use anyhow::Result;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use greentic_secrets_spec::prelude::*;
+use anyhow::{Context, Result};
+use aws_config::BehaviorVersion;
+use aws_sdk_kms::{primitives::Blob as KmsBlob, Client as KmsClient};
+use aws_sdk_secretsmanager::error::SdkError;
+use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType};
+use aws_sdk_secretsmanager::Client as SecretsManagerClient;
+use aws_types::region::Region;
 use greentic_secrets_spec::{
-    KeyProvider, Scope, SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
+    KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
+    SecretsError, SecretsResult, VersionedSecret,
 };
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::env;
+use std::sync::Arc;
+use tokio::runtime::Runtime;
 
-const DEFAULT_PREFIX: &str = "greentic";
+const DEFAULT_PREFIX: &str = "gtsec";
+const DEFAULT_STAGE: &str = "AWSCURRENT";
+const PREFIX_ENV: &str = "GREENTIC_AWS_SECRET_PREFIX";
+const STAGE_ENV: &str = "GREENTIC_AWS_VERSION_STAGE";
+const KMS_KEY_ENV: &str = "GREENTIC_AWS_KMS_KEY_ID";
+const REGION_ENV: &str = "GREENTIC_AWS_REGION";
+const TEAM_PLACEHOLDER: &str = "_";
 
-/// Components returned to the broker wiring.
+/// Components returned for integration with the broker/core wiring.
 pub struct BackendComponents {
     pub backend: Box<dyn SecretsBackend>,
     pub key_provider: Box<dyn KeyProvider>,
 }
 
-/// Construct the in-memory backend based on environment configuration.
+/// Build the AWS Secrets Manager backend and corresponding KMS key provider.
 pub async fn build_backend() -> Result<BackendComponents> {
-    let config = AwsProviderConfig::from_env()?;
-    let backend = AwsSecretsBackend::new(config.clone());
-    let key_provider = AwsKmsKeyProvider::new(config);
+    let (config, shared_config) = AwsProviderConfig::load_from_env().await?;
+
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .context("failed to create tokio runtime for aws backend")?,
+    );
+
+    let secrets_client = SecretsManagerClient::new(&shared_config);
+    let kms_client = KmsClient::new(&shared_config);
+
+    let backend = AwsSecretsBackend::new(secrets_client, config.clone(), runtime.clone());
+    let key_provider = AwsKmsKeyProvider::new(kms_client, config.clone(), runtime);
+
     Ok(BackendComponents {
         backend: Box::new(backend),
         key_provider: Box::new(key_provider),
     })
 }
 
-/// In-memory backend.
 #[derive(Clone)]
-pub struct AwsSecretsBackend {
-    config: AwsProviderConfig,
-    store: Arc<Mutex<HashMap<String, Vec<StoredSecret>>>>,
+struct AwsProviderConfig {
+    secret_prefix: String,
+    version_stage: String,
+    kms_key_id: String,
 }
 
-impl AwsSecretsBackend {
-    pub(crate) fn new(config: AwsProviderConfig) -> Self {
-        Self {
-            config,
-            store: Arc::new(Mutex::new(HashMap::new())),
+impl AwsProviderConfig {
+    async fn load_from_env() -> Result<(Self, aws_types::SdkConfig)> {
+        let prefix = env::var(PREFIX_ENV).unwrap_or_else(|_| DEFAULT_PREFIX.to_string());
+        let stage = env::var(STAGE_ENV).unwrap_or_else(|_| DEFAULT_STAGE.to_string());
+        let kms_key_id = env::var(KMS_KEY_ENV)
+            .context("GREENTIC_AWS_KMS_KEY_ID must be set for the AWS provider")?;
+        let mut loader = aws_config::defaults(BehaviorVersion::latest());
+        if let Ok(region) = env::var(REGION_ENV) {
+            loader = loader.region(Region::new(region));
         }
+
+        let shared_config = loader.load().await;
+
+        Ok((
+            Self {
+                secret_prefix: prefix,
+                version_stage: stage,
+                kms_key_id,
+            },
+            shared_config,
+        ))
     }
 
-    fn key(&self, uri: &SecretUri) -> String {
+    fn secret_name(&self, uri: &SecretUri) -> String {
         format!(
-            "{}/{}/{}/{}/{}",
-            self.config.secret_prefix,
+            "{}/{}/{}/{}/{}/{}",
+            self.secret_prefix,
             uri.scope().env(),
-            uri.scope()
-                .team()
-                .map(|team| format!("{team}-{}", uri.scope().tenant()))
-                .unwrap_or_else(|| uri.scope().tenant().to_string()),
+            uri.scope().tenant(),
+            uri.scope().team().unwrap_or(TEAM_PLACEHOLDER),
             uri.category(),
             uri.name()
         )
     }
 
-    fn matches_scope(name: &str, scope: &Scope) -> bool {
-        name.contains(scope.env()) && name.contains(scope.tenant())
+    fn scope_prefix(&self, scope: &Scope) -> String {
+        format!("{}/{}/{}/", self.secret_prefix, scope.env(), scope.tenant())
+    }
+}
+
+#[derive(Clone)]
+pub struct AwsSecretsBackend {
+    client: SecretsManagerClient,
+    config: AwsProviderConfig,
+    runtime: Arc<Runtime>,
+}
+
+impl AwsSecretsBackend {
+    fn new(client: SecretsManagerClient, config: AwsProviderConfig, runtime: Arc<Runtime>) -> Self {
+        Self {
+            client,
+            config,
+            runtime,
+        }
+    }
+
+    fn block_on<F, T>(&self, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        self.runtime.block_on(fut)
+    }
+
+    fn fetch_latest_version(&self, secret_id: &str) -> SecretsResult<Option<StoredSecret>> {
+        self.block_on(async {
+            match self
+                .client
+                .get_secret_value()
+                .secret_id(secret_id)
+                .send()
+                .await
+            {
+                Ok(output) => {
+                    deserialize_secret_payload(output.secret_string(), output.secret_binary())
+                }
+                Err(err) => {
+                    if is_not_found(&err) {
+                        Ok(None)
+                    } else {
+                        Err(storage_error("get_secret_value", err))
+                    }
+                }
+            }
+        })
+    }
+
+    fn fetch_version_by_id(
+        &self,
+        secret_id: &str,
+        version_id: &str,
+    ) -> SecretsResult<Option<StoredSecret>> {
+        self.block_on(async {
+            match self
+                .client
+                .get_secret_value()
+                .secret_id(secret_id)
+                .version_id(version_id)
+                .send()
+                .await
+            {
+                Ok(output) => {
+                    deserialize_secret_payload(output.secret_string(), output.secret_binary())
+                }
+                Err(err) => {
+                    if is_not_found(&err) {
+                        Ok(None)
+                    } else {
+                        Err(storage_error("get_secret_value", err))
+                    }
+                }
+            }
+        })
+    }
+
+    fn load_all_versions(&self, uri: &SecretUri) -> SecretsResult<Vec<StoredSecret>> {
+        let secret_id = self.config.secret_name(uri);
+        self.block_on(async {
+            let mut collected = Vec::new();
+            let mut token: Option<String> = None;
+
+            loop {
+                let mut request = self
+                    .client
+                    .list_secret_version_ids()
+                    .secret_id(&secret_id)
+                    .include_deprecated(true);
+
+                if let Some(ref next) = token {
+                    request = request.next_token(next);
+                }
+
+                let response = match request.send().await {
+                    Ok(resp) => resp,
+                    Err(err) => {
+                        if is_not_found(&err) {
+                            return Ok(Vec::new());
+                        }
+                        return Err(storage_error("list_secret_version_ids", err));
+                    }
+                };
+
+                for entry in response.versions() {
+                    if let Some(version_id) = entry.version_id() {
+                        if let Some(stored) = self.fetch_version_by_id(&secret_id, version_id)? {
+                            collected.push(stored);
+                        }
+                    }
+                }
+
+                if let Some(next) = response.next_token() {
+                    token = Some(next.to_string());
+                } else {
+                    break;
+                }
+            }
+
+            collected.sort_by_key(|item| item.version);
+            Ok(collected)
+        })
+    }
+
+    fn ensure_secret_created(
+        &self,
+        secret_id: &str,
+        payload: &str,
+        record: Option<&SecretRecord>,
+    ) -> SecretsResult<bool> {
+        self.block_on(async {
+            let mut request = self
+                .client
+                .create_secret()
+                .name(secret_id)
+                .secret_string(payload);
+            if let Some(record) = record {
+                if let Some(description) = record.meta.description.clone() {
+                    if !description.is_empty() {
+                        request = request.description(description);
+                    }
+                }
+            }
+
+            match request.send().await {
+                Ok(_) => Ok(true),
+                Err(err) => {
+                    if let SdkError::ServiceError(context) = &err {
+                        if context.err().is_resource_exists_exception() {
+                            return Ok(false);
+                        }
+                    }
+                    Err(storage_error("create_secret", err))
+                }
+            }
+        })
+    }
+
+    fn write_new_version(&self, secret_id: &str, payload: &str) -> SecretsResult<()> {
+        self.block_on(async {
+            match self
+                .client
+                .put_secret_value()
+                .secret_id(secret_id)
+                .secret_string(payload)
+                .set_version_stages(Some(vec![self.config.version_stage.clone()]))
+                .send()
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(err) => Err(storage_error("put_secret_value", err)),
+            }
+        })
+    }
+
+    fn list_scope(
+        &self,
+        scope: &Scope,
+        category_prefix: Option<&str>,
+        name_prefix: Option<&str>,
+    ) -> SecretsResult<Vec<SecretListItem>> {
+        let prefix = self.config.scope_prefix(scope);
+
+        self.block_on(async {
+            let mut items = Vec::new();
+            let mut token: Option<String> = None;
+
+            loop {
+                let mut request = self.client.list_secrets();
+                let filter = Filter::builder()
+                    .key(FilterNameStringType::Name)
+                    .values(prefix.clone())
+                    .build();
+                request = request.filters(filter);
+                if let Some(ref next) = token {
+                    request = request.next_token(next);
+                }
+
+                let response = match request.send().await {
+                    Ok(resp) => resp,
+                    Err(err) => return Err(storage_error("list_secrets", err)),
+                };
+
+                for entry in response.secret_list() {
+                    let name = match entry.name() {
+                        Some(value) => value,
+                        None => continue,
+                    };
+                    if !name.starts_with(&prefix) {
+                        continue;
+                    }
+                    let uri = match parse_secret_name(&self.config.secret_prefix, name) {
+                        Some(uri) => uri,
+                        None => continue,
+                    };
+                    if uri.scope().env() != scope.env() || uri.scope().tenant() != scope.tenant() {
+                        continue;
+                    }
+                    if scope.team().is_some() && uri.scope().team() != scope.team() {
+                        continue;
+                    }
+                    if let Some(prefix) = category_prefix {
+                        if !uri.category().starts_with(prefix) {
+                            continue;
+                        }
+                    }
+                    if let Some(prefix) = name_prefix {
+                        if !uri.name().starts_with(prefix) {
+                            continue;
+                        }
+                    }
+
+                    if let Some(stored) = self.fetch_latest_version(name)? {
+                        if stored.deleted {
+                            continue;
+                        }
+                        if let Some(record) = stored.record {
+                            let latest = Some(stored.version.to_string());
+                            items.push(SecretListItem::from_meta(&record.meta, latest));
+                        }
+                    }
+                }
+
+                if let Some(next) = response.next_token() {
+                    token = Some(next.to_string());
+                } else {
+                    break;
+                }
+            }
+
+            Ok(items)
+        })
     }
 }
 
 impl SecretsBackend for AwsSecretsBackend {
     fn put(&self, record: SecretRecord) -> SecretsResult<SecretVersion> {
-        let mut guard = self.store.lock().unwrap();
-        let key = self.key(&record.meta.uri);
-        let entry = guard.entry(key).or_default();
-        let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
-        let stored = StoredSecret::from_record(&record, false)?.with_version(next_version);
-        entry.push(stored);
+        let secret_id = self.config.secret_name(&record.meta.uri);
+
+        let versions = self.load_all_versions(&record.meta.uri)?;
+        let next_version = versions
+            .iter()
+            .map(|stored| stored.version)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+
+        let stored = StoredSecret::live(next_version, record.clone());
+        let payload = serde_json::to_string(&stored)
+            .map_err(|err| SecretsError::Storage(format!("serialize secret payload: {err}")))?;
+
+        if versions.is_empty() {
+            let created = self.ensure_secret_created(&secret_id, &payload, Some(&record))?;
+            if !created {
+                self.write_new_version(&secret_id, &payload)?;
+            }
+        } else {
+            self.write_new_version(&secret_id, &payload)?;
+        }
+
         Ok(SecretVersion {
             version: next_version,
             deleted: false,
@@ -86,24 +384,19 @@ impl SecretsBackend for AwsSecretsBackend {
     }
 
     fn get(&self, uri: &SecretUri, version: Option<u64>) -> SecretsResult<Option<VersionedSecret>> {
-        let guard = self.store.lock().unwrap();
-        let entry = match guard.get(&self.key(uri)) {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        let stored = match version {
-            Some(ver) => entry.iter().find(|item| item.version == ver).cloned(),
-            None => entry.last().cloned(),
-        };
-        match stored {
-            None => Ok(None),
-            Some(secret) => {
-                if secret.deleted {
-                    Ok(None)
-                } else {
-                    Ok(Some(secret.into_versioned()?))
-                }
-            }
+        let secret_id = self.config.secret_name(uri);
+
+        if let Some(version) = version {
+            let versions = self.load_all_versions(uri)?;
+            return Ok(versions
+                .into_iter()
+                .find(|stored| stored.version == version)
+                .map(|stored| stored.into_versioned()));
+        }
+
+        match self.fetch_latest_version(&secret_id)? {
+            Some(stored) if !stored.deleted => Ok(Some(stored.into_versioned())),
+            _ => Ok(None),
         }
     }
 
@@ -113,47 +406,31 @@ impl SecretsBackend for AwsSecretsBackend {
         category_prefix: Option<&str>,
         name_prefix: Option<&str>,
     ) -> SecretsResult<Vec<SecretListItem>> {
-        let guard = self.store.lock().unwrap();
-        let mut items = Vec::new();
-        for (name, versions) in guard.iter() {
-            if !Self::matches_scope(name, scope) {
-                continue;
-            }
-            if let Some(latest) = versions.last() {
-                if latest.deleted {
-                    continue;
-                }
-                if let Some(item) = latest.clone().into_list_item()? {
-                    if category_prefix
-                        .map(|prefix| !item.uri.category().starts_with(prefix))
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    if name_prefix
-                        .map(|prefix| !item.uri.name().starts_with(prefix))
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    items.push(item);
-                }
-            }
-        }
-        Ok(items)
+        self.list_scope(scope, category_prefix, name_prefix)
     }
 
     fn delete(&self, uri: &SecretUri) -> SecretsResult<SecretVersion> {
-        let mut guard = self.store.lock().unwrap();
-        let entry = guard
-            .get_mut(&self.key(uri))
-            .ok_or_else(|| SecretsError::Storage("secret does not exist".into()))?;
-        let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
-        entry.push(StoredSecret {
-            version: next_version,
-            deleted: true,
-            record: None,
-        });
+        let secret_id = self.config.secret_name(uri);
+        let versions = self.load_all_versions(uri)?;
+        if versions.is_empty() {
+            return Err(SecretsError::NotFound {
+                entity: uri.to_string(),
+            });
+        }
+
+        let next_version = versions
+            .iter()
+            .map(|stored| stored.version)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+
+        let stored = StoredSecret::tombstone(next_version);
+        let payload = serde_json::to_string(&stored)
+            .map_err(|err| SecretsError::Storage(format!("serialize tombstone payload: {err}")))?;
+
+        self.write_new_version(&secret_id, &payload)?;
+
         Ok(SecretVersion {
             version: next_version,
             deleted: true,
@@ -161,9 +438,8 @@ impl SecretsBackend for AwsSecretsBackend {
     }
 
     fn versions(&self, uri: &SecretUri) -> SecretsResult<Vec<SecretVersion>> {
-        let guard = self.store.lock().unwrap();
-        let entry = guard.get(&self.key(uri)).cloned().unwrap_or_default();
-        Ok(entry
+        Ok(self
+            .load_all_versions(uri)?
             .into_iter()
             .map(|stored| SecretVersion {
                 version: stored.version,
@@ -173,324 +449,190 @@ impl SecretsBackend for AwsSecretsBackend {
     }
 
     fn exists(&self, uri: &SecretUri) -> SecretsResult<bool> {
-        let guard = self.store.lock().unwrap();
-        Ok(guard
-            .get(&self.key(uri))
-            .and_then(|versions| versions.last())
-            .map(|secret| !secret.deleted)
-            .unwrap_or(false))
+        Ok(self.get(uri, None)?.is_some())
     }
 }
 
-/// In-memory KMS key wrapping provider.
 #[derive(Clone)]
 pub struct AwsKmsKeyProvider {
-    config: AwsProviderConfig,
-    kek_store: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    client: KmsClient,
+    key_id: String,
+    runtime: Arc<Runtime>,
 }
 
 impl AwsKmsKeyProvider {
-    pub(crate) fn new(config: AwsProviderConfig) -> Self {
+    fn new(client: KmsClient, config: AwsProviderConfig, runtime: Arc<Runtime>) -> Self {
         Self {
-            config,
-            kek_store: Arc::new(Mutex::new(HashMap::new())),
+            client,
+            key_id: config.kms_key_id,
+            runtime,
         }
     }
 
-    fn get_or_create_kek(&self, alias: &str) -> Vec<u8> {
-        let mut store = self.kek_store.lock().unwrap();
-        store
-            .entry(alias.to_string())
-            .or_insert_with(|| {
-                let mut rng = rand::rng();
-                let mut key = [0u8; 32];
-                rng.fill(&mut key);
-                key.to_vec()
-            })
-            .clone()
+    fn block_on<F, T>(&self, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        self.runtime.block_on(fut)
+    }
+
+    fn context(scope: &Scope) -> HashMap<String, String> {
+        let mut ctx = HashMap::new();
+        ctx.insert("env".into(), scope.env().to_string());
+        ctx.insert("tenant".into(), scope.tenant().to_string());
+        if let Some(team) = scope.team() {
+            ctx.insert("team".into(), team.to_string());
+        }
+        ctx
     }
 }
 
 impl KeyProvider for AwsKmsKeyProvider {
     fn wrap_dek(&self, scope: &Scope, dek: &[u8]) -> SecretsResult<Vec<u8>> {
-        let alias = self
-            .config
-            .kms_aliases
-            .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| SecretsError::Crypto("missing KMS alias".into()))?;
-        let kek = self.get_or_create_kek(alias);
-        Ok(xor(&kek, dek))
+        let context = Self::context(scope);
+        self.block_on(async {
+            match self
+                .client
+                .encrypt()
+                .key_id(&self.key_id)
+                .set_encryption_context(Some(context))
+                .plaintext(KmsBlob::new(dek.to_vec()))
+                .send()
+                .await
+            {
+                Ok(output) => output
+                    .ciphertext_blob()
+                    .map(|blob| blob.as_ref().to_vec())
+                    .ok_or_else(|| {
+                        SecretsError::Backend("kms encrypt returned no ciphertext".into())
+                    }),
+                Err(err) => Err(SecretsError::Backend(format!("kms encrypt: {err}"))),
+            }
+        })
     }
 
     fn unwrap_dek(&self, scope: &Scope, wrapped: &[u8]) -> SecretsResult<Vec<u8>> {
-        let alias = self
-            .config
-            .kms_aliases
-            .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| SecretsError::Crypto("missing KMS alias".into()))?;
-        let kek = self.get_or_create_kek(alias);
-        Ok(xor(&kek, wrapped))
-    }
-}
-
-fn xor(kek: &[u8], data: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(idx, byte)| byte ^ kek[idx % kek.len()])
-        .collect()
-}
-
-fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
-    STANDARD
-        .decode(input.as_bytes())
-        .map_err(|err| SecretsError::Storage(err.to_string()))
-}
-
-#[derive(Clone, Debug)]
-struct AwsProviderConfig {
-    secret_prefix: String,
-    kms_aliases: AliasMap,
-}
-
-impl AwsProviderConfig {
-    fn from_env() -> Result<Self> {
-        let prefix =
-            std::env::var("AWS_SM_SECRET_PREFIX").unwrap_or_else(|_| DEFAULT_PREFIX.to_string());
-        Ok(Self {
-            secret_prefix: prefix,
-            kms_aliases: AliasMap::from_env("AWS_SM_KMS_ALIAS")?,
+        let context = Self::context(scope);
+        self.block_on(async {
+            match self
+                .client
+                .decrypt()
+                .key_id(&self.key_id)
+                .set_encryption_context(Some(context))
+                .ciphertext_blob(KmsBlob::new(wrapped.to_vec()))
+                .send()
+                .await
+            {
+                Ok(output) => output
+                    .plaintext()
+                    .map(|blob| blob.as_ref().to_vec())
+                    .ok_or_else(|| {
+                        SecretsError::Backend("kms decrypt returned no plaintext".into())
+                    }),
+                Err(err) => Err(SecretsError::Backend(format!("kms decrypt: {err}"))),
+            }
         })
     }
 }
 
-#[derive(Clone, Debug)]
-struct AliasMap {
-    default: Option<String>,
-    per_env: HashMap<String, String>,
-    per_tenant: HashMap<(String, String), String>,
-}
-
-impl AliasMap {
-    fn from_env(prefix: &str) -> Result<Self> {
-        let default = std::env::var(prefix).ok();
-        let mut per_env = HashMap::new();
-        let mut per_tenant = HashMap::new();
-
-        for (key, value) in std::env::vars() {
-            if !key.starts_with(prefix) || key == prefix {
-                continue;
-            }
-            let suffix = key.trim_start_matches(prefix).trim_matches('_');
-            if suffix.is_empty() {
-                continue;
-            }
-            let tokens: Vec<&str> = suffix.split('_').collect();
-            match tokens.as_slice() {
-                [env] => {
-                    per_env.insert(env.to_lowercase(), value.clone());
-                }
-                [env, tenant] => {
-                    per_tenant.insert((env.to_lowercase(), tenant.to_lowercase()), value.clone());
-                }
-                _ => {}
-            }
-        }
-
-        Ok(Self {
-            default,
-            per_env,
-            per_tenant,
-        })
-    }
-
-    fn resolve(&self, env: &str, tenant: &str) -> Option<&str> {
-        self.per_tenant
-            .get(&(env.to_lowercase(), tenant.to_lowercase()))
-            .or_else(|| self.per_env.get(&env.to_lowercase()))
-            .or(self.default.as_ref())
-            .map(String::as_str)
-    }
-
-    #[cfg(test)]
-    fn with_default(alias: impl Into<String>) -> Self {
-        Self {
-            default: Some(alias.into()),
-            per_env: HashMap::new(),
-            per_tenant: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSecret {
     version: u64,
     deleted: bool,
-    record: Option<StoredRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record: Option<SecretRecord>,
 }
 
 impl StoredSecret {
-    fn from_record(record: &SecretRecord, deleted: bool) -> SecretsResult<Self> {
-        Ok(Self {
-            version: 0,
-            deleted,
-            record: Some(StoredRecord::from_record(record)?),
-        })
-    }
-
-    fn with_version(mut self, version: u64) -> Self {
-        self.version = version;
-        self
-    }
-
-    fn into_versioned(self) -> SecretsResult<VersionedSecret> {
-        if self.deleted {
-            return Ok(VersionedSecret {
-                version: self.version,
-                deleted: true,
-                record: None,
-            });
-        }
-        let record = self
-            .record
-            .ok_or_else(|| SecretsError::Storage("missing record".into()))?
-            .into_record()?;
-        Ok(VersionedSecret {
-            version: self.version,
+    fn live(version: u64, record: SecretRecord) -> Self {
+        Self {
+            version,
             deleted: false,
             record: Some(record),
-        })
+        }
     }
 
-    fn into_list_item(self) -> SecretsResult<Option<SecretListItem>> {
-        if self.deleted {
+    fn tombstone(version: u64) -> Self {
+        Self {
+            version,
+            deleted: true,
+            record: None,
+        }
+    }
+
+    fn into_versioned(self) -> VersionedSecret {
+        VersionedSecret {
+            version: self.version,
+            deleted: self.deleted,
+            record: self.record,
+        }
+    }
+}
+
+fn parse_secret_name(prefix: &str, name: &str) -> Option<SecretUri> {
+    let mut segments = name.split('/');
+    let prefix_segment = segments.next()?;
+    if prefix_segment != prefix {
+        return None;
+    }
+    let env = segments.next()?;
+    let tenant = segments.next()?;
+    let team_segment = segments.next()?;
+    let category = segments.next()?;
+    let name_segment = segments.next()?;
+    if segments.next().is_some() {
+        return None;
+    }
+
+    let team = if team_segment == TEAM_PLACEHOLDER {
+        None
+    } else {
+        Some(team_segment.to_string())
+    };
+
+    let scope = Scope::new(env.to_string(), tenant.to_string(), team).ok()?;
+    SecretUri::new(scope, category, name_segment).ok()
+}
+
+fn deserialize_secret_payload(
+    secret_string: Option<&str>,
+    secret_binary: Option<&aws_smithy_types::Blob>,
+) -> SecretsResult<Option<StoredSecret>> {
+    if let Some(value) = secret_string {
+        if value.trim().is_empty() {
             return Ok(None);
         }
-        let record = self
-            .record
-            .ok_or_else(|| SecretsError::Storage("missing record".into()))?;
-        Ok(Some(SecretListItem::from_meta(
-            &record.meta,
-            Some(self.version.to_string()),
-        )))
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct StoredRecord {
-    meta: SecretMeta,
-    envelope: StoredEnvelope,
-    value: String,
-}
-
-impl StoredRecord {
-    fn from_record(record: &SecretRecord) -> SecretsResult<Self> {
-        Ok(Self {
-            meta: record.meta.clone(),
-            envelope: StoredEnvelope::from_envelope(&record.envelope),
-            value: STANDARD.encode(&record.value),
-        })
+        return serde_json::from_str::<StoredSecret>(value)
+            .map(Some)
+            .map_err(|err| SecretsError::Storage(format!("decode secret payload: {err}")));
     }
 
-    fn into_record(self) -> SecretsResult<SecretRecord> {
-        Ok(SecretRecord::new(
-            self.meta,
-            decode_bytes(&self.value)?,
-            self.envelope.into_envelope()?,
-        ))
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct StoredEnvelope {
-    algorithm: String,
-    nonce: String,
-    hkdf_salt: String,
-    wrapped_dek: String,
-}
-
-impl StoredEnvelope {
-    fn from_envelope(envelope: &Envelope) -> Self {
-        Self {
-            algorithm: envelope.algorithm.to_string(),
-            nonce: STANDARD.encode(&envelope.nonce),
-            hkdf_salt: STANDARD.encode(&envelope.hkdf_salt),
-            wrapped_dek: STANDARD.encode(&envelope.wrapped_dek),
+    if let Some(blob) = secret_binary {
+        let bytes = blob.as_ref();
+        if bytes.is_empty() {
+            return Ok(None);
         }
+        return serde_json::from_slice::<StoredSecret>(bytes)
+            .map(Some)
+            .map_err(|err| SecretsError::Storage(format!("decode secret payload: {err}")));
     }
 
-    fn into_envelope(self) -> SecretsResult<Envelope> {
-        Ok(Envelope {
-            algorithm: self
-                .algorithm
-                .parse()
-                .map_err(|_| SecretsError::Storage("invalid algorithm".into()))?,
-            nonce: decode_bytes(&self.nonce)?,
-            hkdf_salt: decode_bytes(&self.hkdf_salt)?,
-            wrapped_dek: decode_bytes(&self.wrapped_dek)?,
-        })
-    }
+    Ok(None)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use greentic_secrets_spec::{ContentType, EncryptionAlgorithm, Scope, Visibility};
-
-    fn build_record() -> SecretRecord {
-        let scope = Scope::new("prod", "acme", Some("payments".into())).unwrap();
-        let uri = SecretUri::new(scope, "config", "api").unwrap();
-        let mut meta = SecretMeta::new(uri, Visibility::Team, ContentType::Json);
-        meta.description = Some("payments api key".into());
-        let envelope = Envelope {
-            algorithm: EncryptionAlgorithm::Aes256Gcm,
-            nonce: vec![1, 2, 3],
-            hkdf_salt: vec![4, 5, 6],
-            wrapped_dek: vec![7, 8, 9],
-        };
-        SecretRecord::new(meta, vec![10, 11, 12], envelope)
+fn is_not_found<T>(err: &SdkError<T>) -> bool
+where
+    T: aws_smithy_types::error::metadata::ProvideErrorMetadata + Send + Sync + std::fmt::Debug,
+{
+    if let SdkError::ServiceError(context) = err {
+        return context.err().code() == Some("ResourceNotFoundException");
     }
+    false
+}
 
-    #[test]
-    fn put_get_roundtrip() {
-        let config = AwsProviderConfig {
-            secret_prefix: "test".into(),
-            kms_aliases: AliasMap::with_default("alias/test"),
-        };
-        let backend = AwsSecretsBackend::new(config);
-        let record = build_record();
-        backend.put(record.clone()).unwrap();
-        backend.put(record.clone()).unwrap();
-        let latest = backend.get(&record.meta.uri, None).unwrap().unwrap();
-        assert_eq!(latest.version, 2);
-        let first = backend.get(&record.meta.uri, Some(1)).unwrap().unwrap();
-        assert_eq!(first.version, 1);
-    }
-
-    #[test]
-    fn delete_marks_tombstone() {
-        let config = AwsProviderConfig {
-            secret_prefix: "test".into(),
-            kms_aliases: AliasMap::with_default("alias/test"),
-        };
-        let backend = AwsSecretsBackend::new(config);
-        let record = build_record();
-        backend.put(record.clone()).unwrap();
-        backend.delete(&record.meta.uri).unwrap();
-        assert!(backend.get(&record.meta.uri, None).unwrap().is_none());
-        assert!(!backend.exists(&record.meta.uri).unwrap());
-    }
-
-    #[test]
-    fn kms_wrap_unwrap() {
-        let config = AwsProviderConfig {
-            secret_prefix: "test".into(),
-            kms_aliases: AliasMap::with_default("alias/test"),
-        };
-        let provider = AwsKmsKeyProvider::new(config);
-        let scope = Scope::new("prod", "acme", None).unwrap();
-        let dek = vec![1, 2, 3, 4, 5];
-        let wrapped = provider.wrap_dek(&scope, &dek).unwrap();
-        let unwrapped = provider.unwrap_dek(&scope, &wrapped).unwrap();
-        assert_eq!(dek, unwrapped);
-    }
+fn storage_error<T>(operation: &str, err: SdkError<T>) -> SecretsError
+where
+    T: std::fmt::Display,
+{
+    SecretsError::Storage(format!("{operation} failed: {err}"))
 }

@@ -1,35 +1,50 @@
-//! Simplified Azure Key Vault Secrets backend.
+//! Azure Key Vault provider backed by the live REST APIs.
 //!
-//! This in-memory implementation mirrors the APIs required by the broker while
-//! avoiding external Azure dependencies. It stores encrypted records in an
-//! internal map and simulates KEK wrap/unwrap behaviour using per-alias keys.
+//! Secrets are stored as JSON-encoded [`SecretRecord`] values inside Key Vault
+//! secrets, while Data Encryption Keys (DEKs) are wrapped and unwrapped via
+//! the configured Key Vault key. Authentication uses the OAuth2 client
+//! credentials flow with values supplied through environment variables.
 
-use anyhow::Result;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use greentic_secrets_spec::prelude::*;
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use greentic_secrets_spec::{
-    KeyProvider, Scope, SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
+    KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
+    SecretsError, SecretsResult, VersionedSecret,
 };
-use rsa::pkcs1v15::Pkcs1v15Encrypt;
-use rsa::rand_core::OsRng;
-use rsa::{RsaPrivateKey, RsaPublicKey};
+use reqwest::blocking::Client;
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::env;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-const DEFAULT_VAULT: &str = "local-vault";
+const SECRETS_API_VERSION: &str = "7.4";
+const KEYS_API_VERSION: &str = "7.4";
+const TOKEN_SCOPE: &str = "https://vault.azure.net/.default";
 const DEFAULT_PREFIX: &str = "greentic";
+const TEAM_PLACEHOLDER: &str = "_";
+const DEFAULT_TIMEOUT_SECS: u64 = 15;
 
+/// Components returned to the broker wiring.
 pub struct BackendComponents {
     pub backend: Box<dyn SecretsBackend>,
     pub key_provider: Box<dyn KeyProvider>,
 }
 
+/// Construct the Azure Key Vault backend using environment configuration.
 pub async fn build_backend() -> Result<BackendComponents> {
-    let config = AzureProviderConfig::from_env()?;
-    let backend = AzureSecretsBackend::new(config.clone());
-    let key_provider = AzureKeyProvider::new(config);
+    let config = Arc::new(AzureProviderConfig::from_env()?);
+    let client = Client::builder()
+        .timeout(config.http_timeout)
+        .build()
+        .context("failed to build reqwest client for azure provider")?;
+    let auth = Arc::new(AzureAuth::new(&config, client.clone()));
+
+    let backend = AzureSecretsBackend::new(config.clone(), client.clone(), auth.clone());
+    let key_provider = AzureKmsKeyProvider::new(config, client, auth);
+
     Ok(BackendComponents {
         backend: Box::new(backend),
         key_provider: Box::new(key_provider),
@@ -37,43 +52,299 @@ pub async fn build_backend() -> Result<BackendComponents> {
 }
 
 #[derive(Clone)]
-pub struct AzureSecretsBackend {
-    config: AzureProviderConfig,
-    store: Arc<Mutex<HashMap<String, Vec<StoredSecret>>>>,
+struct AzureProviderConfig {
+    vault_uri: String,
+    secret_prefix: String,
+    tenant_id: String,
+    client_id: String,
+    client_secret: String,
+    key_name: String,
+    key_algorithm: String,
+    http_timeout: Duration,
+}
+
+impl AzureProviderConfig {
+    fn from_env() -> Result<Self> {
+        let vault_uri = env::var("GREENTIC_AZURE_VAULT_URI")
+            .context("set GREENTIC_AZURE_VAULT_URI with your Key Vault URI")?;
+        let tenant_id = env::var("AZURE_TENANT_ID")
+            .or_else(|_| env::var("GREENTIC_AZURE_TENANT_ID"))
+            .context("set AZURE_TENANT_ID (or GREENTIC_AZURE_TENANT_ID) for the OAuth flow")?;
+        let client_id = env::var("AZURE_CLIENT_ID")
+            .or_else(|_| env::var("GREENTIC_AZURE_CLIENT_ID"))
+            .context("set AZURE_CLIENT_ID (or GREENTIC_AZURE_CLIENT_ID)")?;
+        let client_secret = env::var("AZURE_CLIENT_SECRET")
+            .or_else(|_| env::var("GREENTIC_AZURE_CLIENT_SECRET"))
+            .context("set AZURE_CLIENT_SECRET (or GREENTIC_AZURE_CLIENT_SECRET)")?;
+        let key_name = env::var("GREENTIC_AZURE_KEY_NAME")
+            .context("set GREENTIC_AZURE_KEY_NAME with the Key Vault key to wrap DEKs")?;
+
+        let key_algorithm = env::var("GREENTIC_AZURE_KEY_ALGORITHM")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "RSA-OAEP".to_string());
+
+        let secret_prefix = env::var("GREENTIC_AZURE_SECRET_PREFIX")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_PREFIX.to_string());
+
+        let timeout = env::var("GREENTIC_AZURE_HTTP_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .and_then(|secs| {
+                if secs == 0 {
+                    None
+                } else {
+                    Some(Duration::from_secs(secs))
+                }
+            })
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+
+        Ok(Self {
+            vault_uri: vault_uri.trim_end_matches('/').to_string(),
+            secret_prefix,
+            tenant_id,
+            client_id,
+            client_secret,
+            key_name,
+            key_algorithm,
+            http_timeout: timeout,
+        })
+    }
+
+    fn secrets_endpoint(&self) -> String {
+        format!("{}/secrets", self.vault_uri)
+    }
+
+    fn keys_endpoint(&self) -> String {
+        format!("{}/keys", self.vault_uri)
+    }
+}
+
+#[derive(Clone)]
+struct AzureSecretsBackend {
+    config: Arc<AzureProviderConfig>,
+    client: Client,
+    auth: Arc<AzureAuth>,
 }
 
 impl AzureSecretsBackend {
-    pub(crate) fn new(config: AzureProviderConfig) -> Self {
+    fn new(config: Arc<AzureProviderConfig>, client: Client, auth: Arc<AzureAuth>) -> Self {
         Self {
             config,
-            store: Arc::new(Mutex::new(HashMap::new())),
+            client,
+            auth,
         }
     }
 
     fn secret_name(&self, uri: &SecretUri) -> String {
-        format!(
-            "{}/secrets/{}/{}/{}/{}/{}",
-            self.config.vault_uri,
-            self.config.secret_prefix,
-            uri.scope().env(),
-            uri.scope().tenant(),
-            uri.category(),
-            uri.name()
-        )
+        let sanitize = |value: &str| {
+            value
+                .chars()
+                .map(|c| match c {
+                    '0'..='9' | 'a'..='z' | 'A'..='Z' | '-' => c.to_ascii_lowercase(),
+                    _ => '-',
+                })
+                .collect::<String>()
+        };
+
+        let base = format!(
+            "{}-{}-{}-{}-{}-{}",
+            sanitize(&self.config.secret_prefix),
+            sanitize(uri.scope().env()),
+            sanitize(uri.scope().tenant()),
+            uri.scope()
+                .team()
+                .map(sanitize)
+                .unwrap_or_else(|| TEAM_PLACEHOLDER.to_string()),
+            sanitize(uri.category()),
+            sanitize(uri.name()),
+        );
+
+        if base.len() <= 110 {
+            return base;
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(base.as_bytes());
+        let suffix = hex::encode(&hasher.finalize()[..6]);
+        let mut truncated = base[..110].to_string();
+        truncated.push('-');
+        truncated.push_str(&suffix);
+        truncated
     }
 
-    fn matches_scope(name: &str, scope: &Scope) -> bool {
-        name.contains(scope.env()) && name.contains(scope.tenant())
+    fn request(
+        &self,
+        method: Method,
+        url: String,
+        body: Option<Value>,
+    ) -> SecretsResult<reqwest::blocking::Response> {
+        let token = self.auth.bearer_token()?;
+        let builder = match method {
+            Method::GET => self.client.get(url),
+            Method::POST => self.client.post(url),
+            Method::PUT => self.client.put(url),
+            Method::DELETE => self.client.delete(url),
+            other => self.client.request(other, url),
+        };
+
+        let builder = builder.header("Authorization", token);
+        let builder = if let Some(payload) = body {
+            builder.json(&payload)
+        } else {
+            builder
+        };
+
+        builder
+            .send()
+            .map_err(|err| SecretsError::Storage(format!("azure request failed: {err}")))
+    }
+
+    fn set_secret(&self, name: &str, payload: &StoredSecret) -> SecretsResult<()> {
+        let url = format!(
+            "{}/{}?api-version={}",
+            self.config.secrets_endpoint(),
+            name,
+            SECRETS_API_VERSION
+        );
+        let encoded = encode_secret(payload)?;
+        let body = json!({ "value": STANDARD.encode(encoded) });
+
+        let response = self.request(Method::PUT, url, Some(body))?;
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().unwrap_or_default();
+            return Err(SecretsError::Storage(format!(
+                "set secret failed: {status} {text}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn get_latest(&self, name: &str) -> SecretsResult<Option<StoredSecret>> {
+        let url = format!(
+            "{}/{}?api-version={}",
+            self.config.secrets_endpoint(),
+            name,
+            SECRETS_API_VERSION
+        );
+        let response = self.request(Method::GET, url, None)?;
+        match response.status() {
+            StatusCode::NOT_FOUND => Ok(None),
+            status if status.is_success() => {
+                let body = response.text().unwrap_or_default();
+                parse_secret_bundle(&body)
+            }
+            status => {
+                let text = response.text().unwrap_or_default();
+                Err(SecretsError::Storage(format!(
+                    "get secret failed: {status} {text}"
+                )))
+            }
+        }
+    }
+
+    fn get_version(&self, name: &str, version_id: &str) -> SecretsResult<Option<StoredSecret>> {
+        let url = format!(
+            "{}/{}/{}?api-version={}",
+            self.config.secrets_endpoint(),
+            name,
+            version_id,
+            SECRETS_API_VERSION
+        );
+        let response = self.request(Method::GET, url, None)?;
+        match response.status() {
+            StatusCode::NOT_FOUND => Ok(None),
+            status if status.is_success() => {
+                let body = response.text().unwrap_or_default();
+                parse_secret_bundle(&body)
+            }
+            status => {
+                let text = response.text().unwrap_or_default();
+                Err(SecretsError::Storage(format!(
+                    "get secret version failed: {status} {text}"
+                )))
+            }
+        }
+    }
+
+    fn list_version_ids(&self, name: &str) -> SecretsResult<Vec<String>> {
+        let mut url = format!(
+            "{}/{}/versions?api-version={}",
+            self.config.secrets_endpoint(),
+            name,
+            SECRETS_API_VERSION
+        );
+        let mut collected = Vec::new();
+
+        loop {
+            let response = self.request(Method::GET, url.clone(), None)?;
+            match response.status() {
+                StatusCode::NOT_FOUND => return Ok(Vec::new()),
+                status if status.is_success() => {
+                    let body = response.text().unwrap_or_default();
+                    let parsed: SecretVersionListResponse =
+                        serde_json::from_str(&body).map_err(|err| {
+                            SecretsError::Storage(format!(
+                                "failed to parse secret versions list: {err}; body={body}"
+                            ))
+                        })?;
+
+                    if let Some(entries) = parsed.value {
+                        for entry in entries {
+                            if let Some(id) = extract_version_segment(&entry.id) {
+                                collected.push(id.to_string());
+                            }
+                        }
+                    }
+
+                    if let Some(next) = parsed.next_link {
+                        url = next;
+                        continue;
+                    }
+                    break;
+                }
+                status => {
+                    let text = response.text().unwrap_or_default();
+                    return Err(SecretsError::Storage(format!(
+                        "list secret versions failed: {status} {text}"
+                    )));
+                }
+            }
+        }
+
+        Ok(collected)
+    }
+
+    fn load_all_versions(&self, name: &str) -> SecretsResult<Vec<StoredSecret>> {
+        let mut versions = Vec::new();
+        let ids = self.list_version_ids(name)?;
+        for version_id in ids {
+            if let Some(stored) = self.get_version(name, &version_id)? {
+                versions.push(stored);
+            }
+        }
+        versions.sort_by_key(|entry| entry.version);
+        Ok(versions)
     }
 }
 
 impl SecretsBackend for AzureSecretsBackend {
     fn put(&self, record: SecretRecord) -> SecretsResult<SecretVersion> {
-        let mut guard = self.store.lock().unwrap();
-        let key = self.secret_name(&record.meta.uri);
-        let entry = guard.entry(key).or_default();
-        let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
-        entry.push(StoredSecret::from_record(&record, false)?.with_version(next_version));
+        let secret_name = self.secret_name(&record.meta.uri);
+        let versions = self.load_all_versions(&secret_name)?;
+        let next_version = versions
+            .iter()
+            .map(|entry| entry.version)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+
+        let stored = StoredSecret::live(next_version, record.clone());
+        self.set_secret(&secret_name, &stored)?;
+
         Ok(SecretVersion {
             version: next_version,
             deleted: false,
@@ -81,24 +352,18 @@ impl SecretsBackend for AzureSecretsBackend {
     }
 
     fn get(&self, uri: &SecretUri, version: Option<u64>) -> SecretsResult<Option<VersionedSecret>> {
-        let guard = self.store.lock().unwrap();
-        let entry = match guard.get(&self.secret_name(uri)) {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        let stored = match version {
-            Some(v) => entry.iter().find(|item| item.version == v).cloned(),
-            None => entry.last().cloned(),
-        };
-        match stored {
-            None => Ok(None),
-            Some(secret) => {
-                if secret.deleted {
-                    Ok(None)
-                } else {
-                    Ok(Some(secret.into_versioned()?))
-                }
-            }
+        let name = self.secret_name(uri);
+        if let Some(requested) = version {
+            let versions = self.load_all_versions(&name)?;
+            return Ok(versions
+                .into_iter()
+                .find(|entry| entry.version == requested && !entry.deleted)
+                .and_then(StoredSecret::into_versioned));
+        }
+
+        match self.get_latest(&name)? {
+            Some(entry) if !entry.deleted => Ok(entry.into_versioned()),
+            _ => Ok(None),
         }
     }
 
@@ -108,47 +373,109 @@ impl SecretsBackend for AzureSecretsBackend {
         category_prefix: Option<&str>,
         name_prefix: Option<&str>,
     ) -> SecretsResult<Vec<SecretListItem>> {
-        let guard = self.store.lock().unwrap();
         let mut items = Vec::new();
-        for (name, versions) in guard.iter() {
-            if !Self::matches_scope(name, scope) {
+        let mut url = format!(
+            "{}?api-version={}",
+            self.config.secrets_endpoint(),
+            SECRETS_API_VERSION
+        );
+
+        loop {
+            let token = self.auth.bearer_token()?;
+            let response = self
+                .client
+                .get(&url)
+                .header("Authorization", token)
+                .send()
+                .map_err(|err| {
+                    SecretsError::Storage(format!("list secrets request failed: {err}"))
+                })?;
+
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            if !status.is_success() {
+                return Err(SecretsError::Storage(format!(
+                    "list secrets failed: {status} {body}"
+                )));
+            }
+
+            let parsed: SecretListResponse = serde_json::from_str(&body).map_err(|err| {
+                SecretsError::Storage(format!(
+                    "failed to decode list secrets response: {err}; body={body}"
+                ))
+            })?;
+
+            if let Some(secrets) = parsed.value {
+                for entry in secrets {
+                    let Some(secret_name) = extract_secret_name(&entry.id) else {
+                        continue;
+                    };
+
+                    if !secret_name.starts_with(&self.config.secret_prefix) {
+                        continue;
+                    }
+
+                    if let Some(stored) = self.get_latest(secret_name)? {
+                        if stored.deleted {
+                            continue;
+                        }
+                        if let Some(record) = stored.record {
+                            if record.meta.scope().env() != scope.env()
+                                || record.meta.scope().tenant() != scope.tenant()
+                            {
+                                continue;
+                            }
+                            if scope.team().is_some() && record.meta.scope().team() != scope.team()
+                            {
+                                continue;
+                            }
+                            if let Some(prefix) = category_prefix {
+                                if !record.meta.uri.category().starts_with(prefix) {
+                                    continue;
+                                }
+                            }
+                            if let Some(prefix) = name_prefix {
+                                if !record.meta.uri.name().starts_with(prefix) {
+                                    continue;
+                                }
+                            }
+                            items.push(SecretListItem::from_meta(
+                                &record.meta,
+                                Some(stored.version.to_string()),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if let Some(next) = parsed.next_link {
+                url = next;
                 continue;
             }
-            if let Some(latest) = versions.last() {
-                if latest.deleted {
-                    continue;
-                }
-                if let Some(item) = latest.clone().into_list_item()? {
-                    if category_prefix
-                        .map(|prefix| !item.uri.category().starts_with(prefix))
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    if name_prefix
-                        .map(|prefix| !item.uri.name().starts_with(prefix))
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    items.push(item);
-                }
-            }
+            break;
         }
+
         Ok(items)
     }
 
     fn delete(&self, uri: &SecretUri) -> SecretsResult<SecretVersion> {
-        let mut guard = self.store.lock().unwrap();
-        let entry = guard
-            .get_mut(&self.secret_name(uri))
-            .ok_or_else(|| SecretsError::Storage("secret does not exist".into()))?;
-        let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
-        entry.push(StoredSecret {
-            version: next_version,
-            deleted: true,
-            record: None,
-        });
+        let name = self.secret_name(uri);
+        let versions = self.load_all_versions(&name)?;
+        if versions.is_empty() {
+            return Err(SecretsError::NotFound {
+                entity: uri.to_string(),
+            });
+        }
+
+        let next_version = versions
+            .iter()
+            .map(|entry| entry.version)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let tombstone = StoredSecret::tombstone(next_version);
+        self.set_secret(&name, &tombstone)?;
+
         Ok(SecretVersion {
             version: next_version,
             deleted: true,
@@ -156,347 +483,279 @@ impl SecretsBackend for AzureSecretsBackend {
     }
 
     fn versions(&self, uri: &SecretUri) -> SecretsResult<Vec<SecretVersion>> {
-        let guard = self.store.lock().unwrap();
-        Ok(guard
-            .get(&self.secret_name(uri))
-            .cloned()
-            .unwrap_or_default()
+        let name = self.secret_name(uri);
+        Ok(self
+            .load_all_versions(&name)?
             .into_iter()
-            .map(|secret| SecretVersion {
-                version: secret.version,
-                deleted: secret.deleted,
+            .map(|entry| SecretVersion {
+                version: entry.version,
+                deleted: entry.deleted,
             })
             .collect())
     }
 
     fn exists(&self, uri: &SecretUri) -> SecretsResult<bool> {
-        let guard = self.store.lock().unwrap();
-        Ok(guard
-            .get(&self.secret_name(uri))
-            .and_then(|versions| versions.last())
-            .map(|secret| !secret.deleted)
-            .unwrap_or(false))
+        Ok(self
+            .get_latest(&self.secret_name(uri))?
+            .map_or(false, |entry| !entry.deleted))
     }
 }
 
-#[derive(Clone)]
-pub struct AzureKeyProvider {
-    config: AzureProviderConfig,
-    store: Arc<Mutex<HashMap<String, KeyMaterial>>>,
+struct AzureAuth {
+    token_url: String,
+    client_id: String,
+    client_secret: String,
+    client: Client,
+    cache: Mutex<Option<TokenCache>>,
 }
 
-impl AzureKeyProvider {
-    pub(crate) fn new(config: AzureProviderConfig) -> Self {
+impl AzureAuth {
+    fn new(config: &AzureProviderConfig, client: Client) -> Self {
+        Self {
+            token_url: format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                config.tenant_id
+            ),
+            client_id: config.client_id.clone(),
+            client_secret: config.client_secret.clone(),
+            client,
+            cache: Mutex::new(None),
+        }
+    }
+
+    fn bearer_token(&self) -> SecretsResult<String> {
+        let mut guard = self.cache.lock().unwrap();
+        if let Some(cache) = guard.as_ref() {
+            if Instant::now() < cache.expires_at {
+                return Ok(format!("Bearer {}", cache.token));
+            }
+        }
+
+        let params = [
+            ("grant_type", "client_credentials"),
+            ("client_id", self.client_id.as_str()),
+            ("client_secret", self.client_secret.as_str()),
+            ("scope", TOKEN_SCOPE),
+        ];
+
+        let response = self
+            .client
+            .post(&self.token_url)
+            .form(&params)
+            .send()
+            .map_err(|err| {
+                SecretsError::Backend(format!("failed to request azure token: {err}"))
+            })?;
+
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(SecretsError::Backend(format!(
+                "token request failed: {status} {body}"
+            )));
+        }
+
+        let parsed: TokenResponse = serde_json::from_str(&body).map_err(|err| {
+            SecretsError::Backend(format!(
+                "failed to parse token response: {err}; body={body}"
+            ))
+        })?;
+
+        let expires_in = parsed.expires_in.unwrap_or(3600);
+        let cache_entry = TokenCache {
+            token: parsed.access_token,
+            expires_at: Instant::now() + Duration::from_secs(expires_in.saturating_sub(60)),
+        };
+        let token_string = format!("Bearer {}", cache_entry.token);
+        *guard = Some(cache_entry);
+        Ok(token_string)
+    }
+}
+
+struct TokenCache {
+    token: String,
+    expires_at: Instant,
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
+#[derive(Clone)]
+struct AzureKmsKeyProvider {
+    config: Arc<AzureProviderConfig>,
+    client: Client,
+    auth: Arc<AzureAuth>,
+}
+
+impl AzureKmsKeyProvider {
+    fn new(config: Arc<AzureProviderConfig>, client: Client, auth: Arc<AzureAuth>) -> Self {
         Self {
             config,
-            store: Arc::new(Mutex::new(HashMap::new())),
+            client,
+            auth,
         }
     }
 
-    fn get_or_create_key(&self, alias: &str) -> SecretsResult<KeyMaterial> {
-        let mut guard = self.store.lock().unwrap();
-        if let Some(material) = guard.get(alias) {
-            return Ok(material.clone());
+    fn key_operation(&self, operation: &str, body: Value) -> SecretsResult<Value> {
+        let url = format!(
+            "{}/{}/{}?api-version={}",
+            self.config.keys_endpoint(),
+            self.config.key_name,
+            operation,
+            KEYS_API_VERSION
+        );
+
+        let response = self
+            .client
+            .post(url)
+            .header("Authorization", self.auth.bearer_token()?)
+            .json(&body)
+            .send()
+            .map_err(|err| SecretsError::Backend(format!("azure key request failed: {err}")))?;
+
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(SecretsError::Backend(format!(
+                "key operation failed: {status} {body}"
+            )));
         }
 
-        let mut generator = OsRng;
-        let private = RsaPrivateKey::new(&mut generator, 2048)
-            .map_err(|err| SecretsError::Crypto(err.to_string()))?;
-        let public = RsaPublicKey::from(&private);
-        let material = KeyMaterial { private, public };
-        guard.insert(alias.to_string(), material.clone());
-        Ok(material)
-    }
-}
-
-impl KeyProvider for AzureKeyProvider {
-    fn wrap_dek(&self, scope: &Scope, dek: &[u8]) -> SecretsResult<Vec<u8>> {
-        let key_id = self
-            .config
-            .key_ids
-            .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| SecretsError::Crypto("missing key identifier".into()))?;
-        let material = self.get_or_create_key(key_id)?;
-        let mut generator = OsRng;
-        material
-            .public
-            .encrypt(&mut generator, Pkcs1v15Encrypt, dek)
-            .map_err(|err| SecretsError::Crypto(err.to_string()))
-    }
-
-    fn unwrap_dek(&self, scope: &Scope, wrapped: &[u8]) -> SecretsResult<Vec<u8>> {
-        let key_id = self
-            .config
-            .key_ids
-            .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| SecretsError::Crypto("missing key identifier".into()))?;
-        let material = self.get_or_create_key(key_id)?;
-        material
-            .private
-            .decrypt(Pkcs1v15Encrypt, wrapped)
-            .map_err(|err| SecretsError::Crypto(err.to_string()))
-    }
-}
-
-#[derive(Clone)]
-struct KeyMaterial {
-    private: RsaPrivateKey,
-    public: RsaPublicKey,
-}
-
-fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
-    STANDARD
-        .decode(input.as_bytes())
-        .map_err(|err| SecretsError::Storage(err.to_string()))
-}
-
-#[derive(Clone, Debug)]
-struct AzureProviderConfig {
-    vault_uri: String,
-    secret_prefix: String,
-    key_ids: AliasMap,
-}
-
-impl AzureProviderConfig {
-    fn from_env() -> Result<Self> {
-        let vault = std::env::var("AZURE_KV_VAULT").unwrap_or_else(|_| DEFAULT_VAULT.to_string());
-        let prefix =
-            std::env::var("AZURE_KV_SECRET_PREFIX").unwrap_or_else(|_| DEFAULT_PREFIX.to_string());
-        Ok(Self {
-            vault_uri: vault,
-            secret_prefix: prefix,
-            key_ids: AliasMap::from_env("AZURE_KV_KEY_ID")?,
+        serde_json::from_str(&body).map_err(|err| {
+            SecretsError::Backend(format!("failed to parse key response: {err}; body={body}"))
         })
     }
 }
 
-#[derive(Clone, Debug)]
-struct AliasMap {
-    default: Option<String>,
-    per_env: HashMap<String, String>,
-    per_tenant: HashMap<(String, String), String>,
-}
-
-impl AliasMap {
-    fn from_env(prefix: &str) -> Result<Self> {
-        let default = std::env::var(prefix).ok();
-        let mut per_env = HashMap::new();
-        let mut per_tenant = HashMap::new();
-        for (key, value) in std::env::vars() {
-            if !key.starts_with(prefix) || key == prefix {
-                continue;
-            }
-            let suffix = key.trim_start_matches(prefix).trim_matches('_');
-            if suffix.is_empty() {
-                continue;
-            }
-            let components: Vec<&str> = suffix.split('_').collect();
-            match components.as_slice() {
-                [env] => {
-                    per_env.insert(env.to_lowercase(), value.clone());
-                }
-                [env, tenant] => {
-                    per_tenant.insert((env.to_lowercase(), tenant.to_lowercase()), value.clone());
-                }
-                _ => {}
-            }
-        }
-        Ok(Self {
-            default,
-            per_env,
-            per_tenant,
-        })
+impl KeyProvider for AzureKmsKeyProvider {
+    fn wrap_dek(&self, _scope: &Scope, dek: &[u8]) -> SecretsResult<Vec<u8>> {
+        let payload = json!({
+            "alg": self.config.key_algorithm,
+            "value": STANDARD.encode(dek),
+        });
+        let response = self.key_operation("wrapkey", payload)?;
+        let wrapped = response
+            .get("value")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| SecretsError::Backend("wrapkey response missing value".into()))?;
+        STANDARD
+            .decode(wrapped)
+            .map_err(|err| SecretsError::Backend(format!("failed to decode wrapped key: {err}")))
     }
 
-    fn resolve(&self, env: &str, tenant: &str) -> Option<&str> {
-        self.per_tenant
-            .get(&(env.to_lowercase(), tenant.to_lowercase()))
-            .or_else(|| self.per_env.get(&env.to_lowercase()))
-            .or(self.default.as_ref())
-            .map(String::as_str)
-    }
-
-    #[cfg(test)]
-    fn with_default(alias: impl Into<String>) -> Self {
-        Self {
-            default: Some(alias.into()),
-            per_env: HashMap::new(),
-            per_tenant: HashMap::new(),
-        }
+    fn unwrap_dek(&self, _scope: &Scope, wrapped: &[u8]) -> SecretsResult<Vec<u8>> {
+        let payload = json!({
+            "alg": self.config.key_algorithm,
+            "value": STANDARD.encode(wrapped),
+        });
+        let response = self.key_operation("unwrapkey", payload)?;
+        let plaintext = response
+            .get("value")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| SecretsError::Backend("unwrapkey response missing value".into()))?;
+        STANDARD
+            .decode(plaintext)
+            .map_err(|err| SecretsError::Backend(format!("failed to decode unwrapped key: {err}")))
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSecret {
     version: u64,
     deleted: bool,
-    record: Option<StoredRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record: Option<SecretRecord>,
 }
 
 impl StoredSecret {
-    fn from_record(record: &SecretRecord, deleted: bool) -> SecretsResult<Self> {
-        Ok(Self {
-            version: 0,
-            deleted,
-            record: Some(StoredRecord::from_record(record)?),
-        })
-    }
-
-    fn with_version(mut self, version: u64) -> Self {
-        self.version = version;
-        self
-    }
-
-    fn into_versioned(self) -> SecretsResult<VersionedSecret> {
-        if self.deleted {
-            return Ok(VersionedSecret {
-                version: self.version,
-                deleted: true,
-                record: None,
-            });
-        }
-        let record = self
-            .record
-            .ok_or_else(|| SecretsError::Storage("missing record".into()))?
-            .into_record()?;
-        Ok(VersionedSecret {
-            version: self.version,
+    fn live(version: u64, record: SecretRecord) -> Self {
+        Self {
+            version,
             deleted: false,
+            record: Some(record),
+        }
+    }
+
+    fn tombstone(version: u64) -> Self {
+        Self {
+            version,
+            deleted: true,
+            record: None,
+        }
+    }
+
+    fn into_versioned(self) -> Option<VersionedSecret> {
+        self.record.map(|record| VersionedSecret {
+            version: self.version,
+            deleted: self.deleted,
             record: Some(record),
         })
     }
+}
 
-    fn into_list_item(self) -> SecretsResult<Option<SecretListItem>> {
-        if self.deleted {
-            return Ok(None);
-        }
-        let record = self
-            .record
-            .ok_or_else(|| SecretsError::Storage("missing record".into()))?;
-        Ok(Some(SecretListItem::from_meta(
-            &record.meta,
-            Some(self.version.to_string()),
-        )))
+fn encode_secret(payload: &StoredSecret) -> SecretsResult<Vec<u8>> {
+    serde_json::to_vec(payload)
+        .map_err(|err| SecretsError::Storage(format!("failed to encode secret payload: {err}")))
+}
+
+fn parse_secret_bundle(body: &str) -> SecretsResult<Option<StoredSecret>> {
+    let bundle: SecretBundle = serde_json::from_str(body).map_err(|err| {
+        SecretsError::Storage(format!("failed to parse secret bundle: {err}; body={body}"))
+    })?;
+    if let Some(value) = bundle.value {
+        let decoded = STANDARD.decode(value).map_err(|err| {
+            SecretsError::Storage(format!("failed to decode secret value: {err}"))
+        })?;
+        let stored: StoredSecret = serde_json::from_slice(&decoded).map_err(|err| {
+            SecretsError::Storage(format!("failed to decode stored secret: {err}"))
+        })?;
+        Ok(Some(stored))
+    } else {
+        Ok(None)
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct StoredRecord {
-    meta: SecretMeta,
-    envelope: StoredEnvelope,
-    value: String,
+#[derive(Deserialize)]
+struct SecretBundle {
+    value: Option<String>,
 }
 
-impl StoredRecord {
-    fn from_record(record: &SecretRecord) -> SecretsResult<Self> {
-        Ok(Self {
-            meta: record.meta.clone(),
-            envelope: StoredEnvelope::from_envelope(&record.envelope),
-            value: STANDARD.encode(&record.value),
-        })
-    }
-
-    fn into_record(self) -> SecretsResult<SecretRecord> {
-        Ok(SecretRecord::new(
-            self.meta,
-            decode_bytes(&self.value)?,
-            self.envelope.into_envelope()?,
-        ))
-    }
+#[derive(Deserialize)]
+struct SecretListResponse {
+    #[serde(default)]
+    value: Option<Vec<SecretListEntry>>,
+    #[serde(rename = "nextLink")]
+    #[serde(default)]
+    next_link: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct StoredEnvelope {
-    algorithm: String,
-    nonce: String,
-    hkdf_salt: String,
-    wrapped_dek: String,
+#[derive(Deserialize)]
+struct SecretListEntry {
+    id: String,
 }
 
-impl StoredEnvelope {
-    fn from_envelope(envelope: &Envelope) -> Self {
-        Self {
-            algorithm: envelope.algorithm.to_string(),
-            nonce: STANDARD.encode(&envelope.nonce),
-            hkdf_salt: STANDARD.encode(&envelope.hkdf_salt),
-            wrapped_dek: STANDARD.encode(&envelope.wrapped_dek),
-        }
-    }
-
-    fn into_envelope(self) -> SecretsResult<Envelope> {
-        Ok(Envelope {
-            algorithm: self
-                .algorithm
-                .parse()
-                .map_err(|_| SecretsError::Storage("invalid algorithm".into()))?,
-            nonce: decode_bytes(&self.nonce)?,
-            hkdf_salt: decode_bytes(&self.hkdf_salt)?,
-            wrapped_dek: decode_bytes(&self.wrapped_dek)?,
-        })
-    }
+#[derive(Deserialize)]
+struct SecretVersionListResponse {
+    #[serde(default)]
+    value: Option<Vec<SecretVersionEntry>>,
+    #[serde(rename = "nextLink")]
+    #[serde(default)]
+    next_link: Option<String>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use greentic_secrets_spec::{ContentType, EncryptionAlgorithm, Scope, Visibility};
+#[derive(Deserialize)]
+struct SecretVersionEntry {
+    id: String,
+}
 
-    fn sample_record() -> SecretRecord {
-        let scope = Scope::new("prod", "payments", Some("core".into())).unwrap();
-        let uri = SecretUri::new(scope, "config", "api").unwrap();
-        let mut meta = SecretMeta::new(uri, Visibility::Team, ContentType::Json);
-        meta.description = Some("azure secret".into());
-        let envelope = Envelope {
-            algorithm: EncryptionAlgorithm::Aes256Gcm,
-            nonce: vec![1, 2, 3],
-            hkdf_salt: vec![4, 5, 6],
-            wrapped_dek: vec![7, 8, 9],
-        };
-        SecretRecord::new(meta, vec![10, 11, 12], envelope)
-    }
+fn extract_secret_name(id: &str) -> Option<&str> {
+    id.split('/').nth_back(0)
+}
 
-    #[test]
-    fn alias_map_resolution() {
-        std::env::set_var("AZURE_KV_KEY_ID", "key/default");
-        std::env::set_var("AZURE_KV_KEY_ID_PROD", "key/prod");
-        std::env::set_var("AZURE_KV_KEY_ID_PROD_PAYMENTS", "key/prod/payments");
-
-        let aliases = AliasMap::from_env("AZURE_KV_KEY_ID").unwrap();
-        assert_eq!(
-            aliases.resolve("prod", "payments").unwrap(),
-            "key/prod/payments"
-        );
-        assert_eq!(aliases.resolve("prod", "billing").unwrap(), "key/prod");
-        assert_eq!(aliases.resolve("dev", "shared").unwrap(), "key/default");
-    }
-
-    #[test]
-    fn secret_name_mapping() {
-        let config = AzureProviderConfig {
-            vault_uri: "https://vault.vault.azure.net".into(),
-            secret_prefix: "prefix".into(),
-            key_ids: AliasMap::with_default("key/default"),
-        };
-        let backend = AzureSecretsBackend::new(config);
-        let record = sample_record();
-        backend.put(record.clone()).unwrap();
-        let stored = backend.get(&record.meta.uri, None).unwrap().unwrap();
-        assert_eq!(stored.version, 1);
-    }
-
-    #[test]
-    fn rsa_key_provider_roundtrip() {
-        let config = AzureProviderConfig {
-            vault_uri: "https://vault.vault.azure.net".into(),
-            secret_prefix: "prefix".into(),
-            key_ids: AliasMap::with_default("key/default"),
-        };
-        let provider = AzureKeyProvider::new(config);
-        let scope = Scope::new("prod", "payments", None).unwrap();
-        let dek = vec![0xAA; 32];
-        let wrapped = provider.wrap_dek(&scope, &dek).unwrap();
-        assert_ne!(wrapped, dek);
-        let unwrapped = provider.unwrap_dek(&scope, &wrapped).unwrap();
-        assert_eq!(unwrapped, dek);
-    }
+fn extract_version_segment(id: &str) -> Option<&str> {
+    id.split('/').nth_back(0)
 }

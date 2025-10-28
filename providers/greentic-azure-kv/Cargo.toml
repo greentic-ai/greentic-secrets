@@ -16,9 +16,10 @@ name = "secrets_provider_azure_kv"
 
 [dependencies]
 anyhow = { workspace = true }
-async-trait = "0.1"
 base64 = "0.22.1"
 greentic_secrets_spec = { workspace = true }
-rsa = "0.9.6"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"

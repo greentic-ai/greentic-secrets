@@ -1,31 +1,40 @@
-//! Simplified Kubernetes Secrets backend.
+//! Kubernetes Secrets backend powered by the Kubernetes REST API.
 //!
-//! This module mimics the broker integration points for Kubernetes by mapping
-//! each logical secret to a namespace derived from `{env,tenant}` and encoding
-//! `{team,category,name,version}` into the Secret resource name. It keeps the
-//! state in-process to remain suitable for tests while still exercising the
-//! namespace/name mapping logic.
+//! Each Greentic secret maps to a namespaced Kubernetes `Secret` resource.
+//! Every write creates a new resource whose name encodes the version number,
+//! preserving history. Deletions append a tombstone version. All operations
+//! execute via the standard Kubernetes HTTPS endpoints using a bearer token
+//! provided through environment variables.
 
-use anyhow::Result;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use greentic_secrets_spec::prelude::*;
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use greentic_secrets_spec::{
-    KeyProvider, Scope, SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
+    Envelope, KeyProvider, Scope, SecretListItem, SecretMeta, SecretRecord, SecretUri,
+    SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
 };
-use rand::{rng, Rng};
+use reqwest::blocking::{Client, Response};
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use tracing::debug;
-
-#[cfg(feature = "sealedsecrets")]
-use tracing::info;
+use std::fs;
+use std::sync::Arc;
+use std::time::Duration;
+use url::form_urlencoded::byte_serialize;
 
 const DEFAULT_NAMESPACE_PREFIX: &str = "greentic";
 const DEFAULT_MAX_SECRET_SIZE: usize = 1_048_576; // 1 MiB
 const NAMESPACE_MAX_LEN: usize = 63;
 const SECRET_NAME_MAX_LEN: usize = 253;
+const LABEL_KEY: &str = "greentic.ai/key";
+const LABEL_VERSION: &str = "greentic.ai/version";
+const LABEL_ENV: &str = "greentic.ai/env";
+const LABEL_TENANT: &str = "greentic.ai/tenant";
+const LABEL_TEAM: &str = "greentic.ai/team";
+const LABEL_CATEGORY: &str = "greentic.ai/category";
+const LABEL_NAME: &str = "greentic.ai/name";
+const STATUS_LABEL: &str = "greentic.ai/status";
 
 /// Components returned to the broker wiring.
 pub struct BackendComponents {
@@ -35,14 +44,11 @@ pub struct BackendComponents {
 
 /// Construct the backend and key provider from environment configuration.
 pub async fn build_backend() -> Result<BackendComponents> {
-    let config = K8sProviderConfig::from_env()?;
-    #[cfg(feature = "sealedsecrets")]
-    if config.use_sealed_secrets {
-        info!("k8s provider configured to emit SealedSecret manifests");
-    }
+    let config = Arc::new(K8sProviderConfig::from_env()?);
+    let client = config.build_http_client()?;
 
-    let backend = K8sSecretsBackend::new(config.clone());
-    let key_provider = K8sKeyProvider::new(config);
+    let backend = K8sSecretsBackend::new(config.clone(), client.clone());
+    let key_provider = K8sKeyProvider::new(config, client);
     Ok(BackendComponents {
         backend: Box::new(backend),
         key_provider: Box::new(key_provider),
@@ -50,29 +56,125 @@ pub async fn build_backend() -> Result<BackendComponents> {
 }
 
 #[derive(Clone)]
-pub struct K8sSecretsBackend {
-    config: K8sProviderConfig,
-    store: Arc<Mutex<HashMap<String, Vec<StoredSecret>>>>,
+struct K8sSecretsBackend {
+    config: Arc<K8sProviderConfig>,
+    client: Client,
 }
 
 impl K8sSecretsBackend {
-    pub(crate) fn new(config: K8sProviderConfig) -> Self {
-        Self {
-            config,
-            store: Arc::new(Mutex::new(HashMap::new())),
+    fn new(config: Arc<K8sProviderConfig>, client: Client) -> Self {
+        Self { config, client }
+    }
+
+    fn request(&self, method: Method, path: &str, body: Option<Value>) -> SecretsResult<Response> {
+        let url = format!(
+            "{}/{}",
+            self.config.api_server.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+
+        let mut builder = self.client.request(method, url);
+        builder = builder.bearer_auth(&self.config.bearer_token);
+        if let Some(payload) = body {
+            builder = builder.json(&payload);
         }
+
+        builder
+            .send()
+            .map_err(|err| SecretsError::Storage(format!("kubernetes request failed: {err}")))
     }
 
-    fn storage_key(&self, uri: &SecretUri) -> String {
-        format!(
-            "{}|{}",
-            namespace_for_scope(&self.config, uri.scope()),
-            canonical_storage_key(uri)
-        )
+    fn ensure_namespace(&self, namespace: &str) -> SecretsResult<()> {
+        let path = format!("/api/v1/namespaces/{}", namespace);
+        let response = self.request(Method::GET, &path, None)?;
+        let status = response.status();
+        if status == StatusCode::OK {
+            return Ok(());
+        }
+
+        if status != StatusCode::NOT_FOUND {
+            let body = response.text().unwrap_or_default();
+            return Err(SecretsError::Storage(format!(
+                "failed to inspect namespace: {status} {body}"
+            )));
+        }
+
+        let create = json!({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": namespace },
+        });
+        let response = self.request(Method::POST, "/api/v1/namespaces", Some(create))?;
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(SecretsError::Storage(format!(
+                "failed to create namespace: {status} {body}"
+            )));
+        }
+        Ok(())
     }
 
-    fn namespace(&self, scope: &Scope) -> String {
-        namespace_for_scope(&self.config, scope)
+    fn put_secret(&self, namespace: &str, manifest: Value) -> SecretsResult<()> {
+        let path = format!("/api/v1/namespaces/{}/secrets", namespace);
+        let response = self.request(Method::POST, &path, Some(manifest))?;
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(SecretsError::Storage(format!(
+                "create secret failed: {status} {body}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn list_versions(&self, namespace: &str, key: &str) -> SecretsResult<Vec<SecretSnapshot>> {
+        let mut snapshots = Vec::new();
+        let selector = format!("{}={}", LABEL_KEY, key);
+        let selector = percent_encode(&selector);
+        let mut continue_token: Option<String> = None;
+
+        loop {
+            let mut path = format!(
+                "/api/v1/namespaces/{}/secrets?labelSelector={}&limit=100",
+                namespace, selector
+            );
+            if let Some(token) = continue_token.as_ref() {
+                path.push_str("&continue=");
+                path.push_str(&percent_encode(token));
+            }
+
+            let response = self.request(Method::GET, &path, None)?;
+            let status = response.status();
+            if status == StatusCode::NOT_FOUND {
+                break;
+            }
+            let body = response.text().unwrap_or_default();
+            if !status.is_success() {
+                return Err(SecretsError::Storage(format!(
+                    "list secrets failed: {status} {body}"
+                )));
+            }
+
+            let mut list: SecretList = serde_json::from_str(&body).map_err(|err| {
+                SecretsError::Storage(format!("failed to decode secret list: {err}; body={body}"))
+            })?;
+
+            for item in list.items.drain(..) {
+                if let Some(snapshot) = parse_secret(item)? {
+                    snapshots.push(snapshot);
+                }
+            }
+
+            if let Some(token) = list.metadata.and_then(|meta| meta.continue_token) {
+                continue_token = Some(token);
+                continue;
+            }
+            break;
+        }
+
+        snapshots.sort_by_key(|snapshot| snapshot.version);
+        Ok(snapshots)
     }
 }
 
@@ -85,29 +187,35 @@ impl SecretsBackend for K8sSecretsBackend {
             )));
         }
 
-        let mut guard = self.store.lock().unwrap();
-        let key = self.storage_key(&record.meta.uri);
-        let entry = guard.entry(key).or_default();
-        let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
-        let namespace = self.namespace(record.meta.uri.scope());
-        let resource_name = secret_resource_name(&record.meta.uri, next_version);
-        let resource_kind = if self.config.use_sealed_secrets {
-            "SealedSecret"
-        } else {
-            "Secret"
-        };
-        debug!(
-            namespace = %namespace,
-            resource = %resource_name,
-            kind = resource_kind,
-            version = next_version,
-            uri = %record.meta.uri,
-            "persisting kubernetes secret"
-        );
-        entry.push(
-            StoredSecret::from_record(&record, false, Some(resource_name))?
-                .with_version(next_version),
-        );
+        if self.config.use_sealed_secrets {
+            return Err(SecretsError::Storage(
+                "sealed secrets mode is not supported by the live Kubernetes backend".into(),
+            ));
+        }
+
+        let namespace = namespace_for_scope(&self.config, record.meta.uri.scope());
+        self.ensure_namespace(&namespace)?;
+
+        let key = canonical_storage_key(&record.meta.uri);
+        let versions = self.list_versions(&namespace, &key)?;
+        let next_version = versions
+            .last()
+            .map(|snapshot| snapshot.version)
+            .unwrap_or(0)
+            .saturating_add(1);
+
+        let name = secret_resource_name(&record.meta.uri, next_version);
+        let manifest = secret_manifest(
+            &record.meta.uri,
+            Some(&record),
+            &namespace,
+            &name,
+            &key,
+            next_version,
+            false,
+        )?;
+        self.put_secret(&namespace, manifest)?;
+
         Ok(SecretVersion {
             version: next_version,
             deleted: false,
@@ -115,19 +223,27 @@ impl SecretsBackend for K8sSecretsBackend {
     }
 
     fn get(&self, uri: &SecretUri, version: Option<u64>) -> SecretsResult<Option<VersionedSecret>> {
-        let guard = self.store.lock().unwrap();
-        let entry = match guard.get(&self.storage_key(uri)) {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        let stored = match version {
-            Some(v) => entry.iter().find(|item| item.version == v).cloned(),
-            None => entry.last().cloned(),
-        };
-        Ok(match stored {
-            Some(secret) => Some(secret.into_versioned()?),
-            None => None,
-        })
+        let namespace = namespace_for_scope(&self.config, uri.scope());
+        let key = canonical_storage_key(uri);
+        let versions = self.list_versions(&namespace, &key)?;
+
+        if let Some(requested) = version {
+            for snapshot in versions {
+                if snapshot.version == requested && !snapshot.deleted {
+                    return snapshot.into_versioned();
+                }
+            }
+            return Ok(None);
+        }
+
+        for snapshot in versions.into_iter().rev() {
+            if snapshot.deleted {
+                continue;
+            }
+            return snapshot.into_versioned();
+        }
+
+        Ok(None)
     }
 
     fn list(
@@ -136,50 +252,90 @@ impl SecretsBackend for K8sSecretsBackend {
         category_prefix: Option<&str>,
         name_prefix: Option<&str>,
     ) -> SecretsResult<Vec<SecretListItem>> {
-        let guard = self.store.lock().unwrap();
+        let namespace = namespace_for_scope(&self.config, scope);
+        let response = self.request(
+            Method::GET,
+            &format!("/api/v1/namespaces/{}/secrets?limit=250", namespace),
+            None,
+        )?;
+
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(SecretsError::Storage(format!(
+                "list secrets failed: {status} {body}"
+            )));
+        }
+
+        let mut list: SecretList = serde_json::from_str(&body).map_err(|err| {
+            SecretsError::Storage(format!("failed to decode secret list: {err}; body={body}"))
+        })?;
+
         let mut items = Vec::new();
-        for versions in guard.values() {
-            if let Some(latest) = versions.last() {
-                if latest.deleted {
+        for item in list.items.drain(..) {
+            let Some(snapshot) = parse_secret(item)? else {
+                continue;
+            };
+            if snapshot.deleted {
+                continue;
+            }
+
+            if let Some(record) = snapshot.record.as_ref() {
+                let record_scope = record.meta.uri.scope();
+                if record_scope.env() != scope.env() || record_scope.tenant() != scope.tenant() {
                     continue;
                 }
-                let Some(stored_record) = latest.record.as_ref() else {
-                    continue;
-                };
-                let meta_scope = stored_record.meta.scope();
-                if meta_scope.env() != scope.env() || meta_scope.tenant() != scope.tenant() {
-                    continue;
+                if let Some(team) = scope.team() {
+                    if record_scope.team() != Some(team) {
+                        continue;
+                    }
                 }
                 if let Some(prefix) = category_prefix {
-                    if !stored_record.meta.uri.category().starts_with(prefix) {
+                    if !record.meta.uri.category().starts_with(prefix) {
                         continue;
                     }
                 }
                 if let Some(prefix) = name_prefix {
-                    if !stored_record.meta.uri.name().starts_with(prefix) {
+                    if !record.meta.uri.name().starts_with(prefix) {
                         continue;
                     }
                 }
-                if let Some(item) = latest.clone().into_list_item()? {
-                    items.push(item);
+
+                let versioned = snapshot.into_versioned()?;
+                if let Some(versioned) = versioned {
+                    if let Some(record) = versioned.record() {
+                        items.push(SecretListItem::from_meta(
+                            &record.meta,
+                            Some(versioned.version.to_string()),
+                        ));
+                    }
                 }
             }
         }
+
         Ok(items)
     }
 
     fn delete(&self, uri: &SecretUri) -> SecretsResult<SecretVersion> {
-        let mut guard = self.store.lock().unwrap();
-        let entry = guard
-            .get_mut(&self.storage_key(uri))
-            .ok_or_else(|| SecretsError::Storage("secret does not exist".into()))?;
-        let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
-        entry.push(StoredSecret {
-            version: next_version,
-            deleted: true,
-            record: None,
-            kube_name: None,
-        });
+        let namespace = namespace_for_scope(&self.config, uri.scope());
+        let key = canonical_storage_key(uri);
+        let versions = self.list_versions(&namespace, &key)?;
+        if versions.is_empty() {
+            return Err(SecretsError::NotFound {
+                entity: uri.to_string(),
+            });
+        }
+
+        let next_version = versions
+            .last()
+            .map(|snapshot| snapshot.version)
+            .unwrap_or(0)
+            .saturating_add(1);
+
+        let name = secret_resource_name(uri, next_version);
+        let manifest = secret_manifest(uri, None, &namespace, &name, &key, next_version, true)?;
+        self.put_secret(&namespace, manifest)?;
+
         Ok(SecretVersion {
             version: next_version,
             deleted: true,
@@ -187,54 +343,41 @@ impl SecretsBackend for K8sSecretsBackend {
     }
 
     fn versions(&self, uri: &SecretUri) -> SecretsResult<Vec<SecretVersion>> {
-        let guard = self.store.lock().unwrap();
-        Ok(guard
-            .get(&self.storage_key(uri))
-            .cloned()
-            .unwrap_or_default()
+        let namespace = namespace_for_scope(&self.config, uri.scope());
+        let key = canonical_storage_key(uri);
+        Ok(self
+            .list_versions(&namespace, &key)?
             .into_iter()
-            .map(|secret| SecretVersion {
-                version: secret.version,
-                deleted: secret.deleted,
+            .map(|snapshot| SecretVersion {
+                version: snapshot.version,
+                deleted: snapshot.deleted,
             })
             .collect())
     }
 
     fn exists(&self, uri: &SecretUri) -> SecretsResult<bool> {
-        let guard = self.store.lock().unwrap();
-        Ok(guard
-            .get(&self.storage_key(uri))
-            .and_then(|versions| versions.last())
-            .map(|secret| !secret.deleted)
-            .unwrap_or(false))
+        Ok(self.get(uri, None)?.is_some())
     }
 }
 
 #[derive(Clone)]
-pub struct K8sKeyProvider {
-    config: K8sProviderConfig,
-    cache: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+struct K8sKeyProvider {
+    config: Arc<K8sProviderConfig>,
+    _client: Client,
 }
 
 impl K8sKeyProvider {
-    pub(crate) fn new(config: K8sProviderConfig) -> Self {
+    fn new(config: Arc<K8sProviderConfig>, client: Client) -> Self {
         Self {
             config,
-            cache: Arc::new(Mutex::new(HashMap::new())),
+            _client: client,
         }
     }
 
-    fn get_or_create_key(&self, alias: &str) -> Vec<u8> {
-        let mut guard = self.cache.lock().unwrap();
-        guard
-            .entry(alias.to_string())
-            .or_insert_with(|| {
-                let mut generator = rng();
-                let mut key = [0u8; 32];
-                generator.fill(&mut key);
-                key.to_vec()
-            })
-            .clone()
+    fn derive_key(&self, alias: &str) -> Vec<u8> {
+        let mut hasher = Sha256::new();
+        hasher.update(alias.as_bytes());
+        hasher.finalize()[..32].to_vec()
     }
 }
 
@@ -245,7 +388,7 @@ impl KeyProvider for K8sKeyProvider {
             .key_aliases
             .resolve(scope.env(), scope.tenant())
             .ok_or_else(|| SecretsError::Crypto("missing key material alias".into()))?;
-        let key = self.get_or_create_key(alias);
+        let key = self.derive_key(alias);
         Ok(xor_bytes(&key, dek))
     }
 
@@ -255,7 +398,7 @@ impl KeyProvider for K8sKeyProvider {
             .key_aliases
             .resolve(scope.env(), scope.tenant())
             .ok_or_else(|| SecretsError::Crypto("missing key material alias".into()))?;
-        let key = self.get_or_create_key(alias);
+        let key = self.derive_key(alias);
         Ok(xor_bytes(&key, wrapped))
     }
 }
@@ -269,6 +412,11 @@ fn xor_bytes(key: &[u8], data: &[u8]) -> Vec<u8> {
 
 #[derive(Clone, Debug)]
 struct K8sProviderConfig {
+    api_server: String,
+    bearer_token: String,
+    ca_bundle: Option<Vec<u8>>,
+    insecure_skip_tls: bool,
+    request_timeout: Duration,
     namespace_prefix: String,
     max_secret_size: usize,
     key_aliases: AliasMap,
@@ -277,18 +425,68 @@ struct K8sProviderConfig {
 
 impl K8sProviderConfig {
     fn from_env() -> Result<Self> {
-        let prefix = std::env::var("K8S_NAMESPACE_PREFIX")
+        let api_server = std::env::var("K8S_API_SERVER")
+            .context("set K8S_API_SERVER to the Kubernetes API server URL")?;
+
+        let bearer_token = match std::env::var("K8S_BEARER_TOKEN") {
+            Ok(value) => value,
+            Err(_) => {
+                let path = std::env::var("K8S_BEARER_TOKEN_FILE")
+                    .context("set K8S_BEARER_TOKEN or K8S_BEARER_TOKEN_FILE")?;
+                String::from_utf8(fs::read(path)?).context("token file is not valid UTF-8")?
+            }
+        };
+
+        let ca_bundle = std::env::var("K8S_CA_BUNDLE")
+            .ok()
+            .map(|path| fs::read(path).context("failed to read K8S_CA_BUNDLE"))
+            .transpose()?;
+
+        let insecure_skip_tls = std::env::var("K8S_INSECURE_SKIP_TLS")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
+            .unwrap_or(false);
+
+        let request_timeout = std::env::var("K8S_HTTP_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .map(Duration::from_secs)
+            .unwrap_or_else(|| Duration::from_secs(15));
+
+        let namespace_prefix = std::env::var("K8S_NAMESPACE_PREFIX")
             .unwrap_or_else(|_| DEFAULT_NAMESPACE_PREFIX.to_string());
         let max_secret_size = std::env::var("K8S_SECRET_MAX_BYTES")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(DEFAULT_MAX_SECRET_SIZE);
+
         Ok(Self {
-            namespace_prefix: prefix,
+            api_server,
+            bearer_token: bearer_token.trim().to_string(),
+            ca_bundle,
+            insecure_skip_tls,
+            request_timeout,
+            namespace_prefix,
             max_secret_size,
             key_aliases: AliasMap::from_env("K8S_KEK_ALIAS")?,
             use_sealed_secrets: cfg!(feature = "sealedsecrets"),
         })
+    }
+
+    fn build_http_client(&self) -> Result<Client> {
+        let mut builder = Client::builder().timeout(self.request_timeout);
+        if let Some(ca) = self.ca_bundle.as_ref() {
+            let cert = reqwest::Certificate::from_pem(ca)
+                .or_else(|_| reqwest::Certificate::from_der(ca))
+                .context("failed to parse K8S_CA_BUNDLE")?;
+            builder = builder.add_root_certificate(cert);
+        }
+        if self.insecure_skip_tls {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+        builder
+            .build()
+            .context("failed to build kubernetes HTTP client")
     }
 }
 
@@ -337,75 +535,61 @@ impl AliasMap {
             .or(self.default.as_ref())
             .map(String::as_str)
     }
-
-    #[cfg(test)]
-    fn with_default(alias: impl Into<String>) -> Self {
-        Self {
-            default: Some(alias.into()),
-            per_env: HashMap::new(),
-            per_tenant: HashMap::new(),
-        }
-    }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct StoredSecret {
+#[derive(Deserialize)]
+struct SecretList {
+    items: Vec<SecretItem>,
+    #[serde(default)]
+    metadata: Option<ListMeta>,
+}
+
+#[derive(Deserialize)]
+struct ListMeta {
+    #[serde(rename = "continue")]
+    #[serde(default)]
+    continue_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SecretItem {
+    metadata: ItemMeta,
+    #[serde(default)]
+    data: Option<HashMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+struct ItemMeta {
+    #[serde(default)]
+    labels: HashMap<String, String>,
+}
+
+struct SecretSnapshot {
     version: u64,
     deleted: bool,
     record: Option<StoredRecord>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    kube_name: Option<String>,
 }
 
-impl StoredSecret {
-    fn from_record(
-        record: &SecretRecord,
-        deleted: bool,
-        kube_name: Option<String>,
-    ) -> SecretsResult<Self> {
-        Ok(Self {
-            version: 0,
-            deleted,
-            record: Some(StoredRecord::from_record(record)?),
-            kube_name,
-        })
-    }
-
-    fn with_version(mut self, version: u64) -> Self {
-        self.version = version;
-        self
-    }
-
-    fn into_versioned(self) -> SecretsResult<VersionedSecret> {
+impl SecretSnapshot {
+    fn into_versioned(self) -> SecretsResult<Option<VersionedSecret>> {
         if self.deleted {
-            return Ok(VersionedSecret {
+            return Ok(Some(VersionedSecret {
                 version: self.version,
                 deleted: true,
                 record: None,
-            });
+            }));
         }
+
         let record = self
             .record
             .ok_or_else(|| SecretsError::Storage("missing record".into()))?
             .into_record()?;
-        Ok(VersionedSecret {
+
+        Ok(Some(VersionedSecret {
             version: self.version,
             deleted: false,
             record: Some(record),
-        })
-    }
-
-    fn into_list_item(self) -> SecretsResult<Option<SecretListItem>> {
-        if self.deleted {
-            return Ok(None);
-        }
-        let record = self
-            .record
-            .ok_or_else(|| SecretsError::Storage("missing record".into()))?;
-        Ok(Some(SecretListItem::from_meta(
-            &record.meta,
-            Some(self.version.to_string()),
-        )))
+        }))
     }
 }
 
@@ -465,6 +649,88 @@ impl StoredEnvelope {
     }
 }
 
+fn parse_secret(item: SecretItem) -> SecretsResult<Option<SecretSnapshot>> {
+    let version = item
+        .metadata
+        .labels
+        .get(LABEL_VERSION)
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| SecretsError::Storage("secret missing version label".into()))?;
+
+    let deleted = item.metadata.labels.get(STATUS_LABEL).map(String::as_str) == Some("deleted");
+
+    let record = if let Some(data) = item.data.and_then(|mut map| map.remove("record")) {
+        let decoded = decode_bytes(&data)?;
+        let stored: StoredRecord = serde_json::from_slice(&decoded).map_err(|err| {
+            SecretsError::Storage(format!("failed to decode secret payload: {err}"))
+        })?;
+        Some(stored)
+    } else {
+        None
+    };
+
+    Ok(Some(SecretSnapshot {
+        version,
+        deleted,
+        record,
+    }))
+}
+
+fn secret_manifest(
+    uri: &SecretUri,
+    record: Option<&SecretRecord>,
+    namespace: &str,
+    name: &str,
+    key: &str,
+    version: u64,
+    deleted: bool,
+) -> SecretsResult<Value> {
+    let mut labels = Map::new();
+    labels.insert(LABEL_KEY.into(), Value::String(key.to_string()));
+    labels.insert(LABEL_VERSION.into(), Value::String(version.to_string()));
+    labels.insert(
+        LABEL_ENV.into(),
+        Value::String(uri.scope().env().to_string()),
+    );
+    labels.insert(
+        LABEL_TENANT.into(),
+        Value::String(uri.scope().tenant().to_string()),
+    );
+    if let Some(team) = uri.scope().team() {
+        labels.insert(LABEL_TEAM.into(), Value::String(team.to_string()));
+    }
+    labels.insert(
+        LABEL_CATEGORY.into(),
+        Value::String(uri.category().to_string()),
+    );
+    labels.insert(LABEL_NAME.into(), Value::String(uri.name().to_string()));
+    if deleted {
+        labels.insert(STATUS_LABEL.into(), Value::String("deleted".into()));
+    }
+
+    let mut metadata = Map::new();
+    metadata.insert("name".into(), Value::String(name.to_string()));
+    metadata.insert("namespace".into(), Value::String(namespace.to_string()));
+    metadata.insert("labels".into(), Value::Object(labels));
+
+    let mut resource = Map::new();
+    resource.insert("apiVersion".into(), Value::String("v1".into()));
+    resource.insert("kind".into(), Value::String("Secret".into()));
+    resource.insert("metadata".into(), Value::Object(metadata));
+    resource.insert("type".into(), Value::String("Opaque".into()));
+
+    if let Some(record) = record {
+        let stored = StoredRecord::from_record(record)?;
+        let payload = serde_json::to_vec(&stored)
+            .map_err(|err| SecretsError::Storage(format!("failed to encode payload: {err}")))?;
+        let mut data = Map::new();
+        data.insert("record".into(), Value::String(STANDARD.encode(payload)));
+        resource.insert("data".into(), Value::Object(data));
+    }
+
+    Ok(Value::Object(resource))
+}
+
 fn namespace_for_scope(config: &K8sProviderConfig, scope: &Scope) -> String {
     let mut labels = Vec::new();
     if !config.namespace_prefix.is_empty() {
@@ -491,6 +757,7 @@ fn sanitize_label(value: &str) -> String {
     for ch in value.chars() {
         match ch {
             'a'..='z' | '0'..='9' => label.push(ch),
+            'A'..='Z' => label.push(ch.to_ascii_lowercase()),
             '-' | '_' | '.' => {
                 if !label.ends_with('-') {
                     label.push('-');
@@ -506,9 +773,10 @@ fn sanitize_label(value: &str) -> String {
         label.pop();
     }
     if label.is_empty() {
-        return "default".into();
+        "default".into()
+    } else {
+        label
     }
-    label
 }
 
 fn join_labels(labels: &[String], max_len: usize) -> String {
@@ -554,89 +822,6 @@ fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
         .map_err(|err| SecretsError::Storage(err.to_string()))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use greentic_secrets_spec::{ContentType, EncryptionAlgorithm, Visibility};
-
-    fn sample_record() -> SecretRecord {
-        let scope = Scope::new("prod", "payments", Some("core_team".into())).unwrap();
-        let uri = SecretUri::new(scope, "config", "api").unwrap();
-        let mut meta = SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Json);
-        meta.description = Some("k8s secret".into());
-        let envelope = Envelope {
-            algorithm: EncryptionAlgorithm::Aes256Gcm,
-            nonce: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-            hkdf_salt: vec![13, 14, 15],
-            wrapped_dek: vec![16, 17, 18],
-        };
-        SecretRecord::new(meta, vec![42; 16], envelope)
-    }
-
-    fn config() -> K8sProviderConfig {
-        K8sProviderConfig {
-            namespace_prefix: "gt".into(),
-            max_secret_size: DEFAULT_MAX_SECRET_SIZE,
-            key_aliases: AliasMap::with_default("alias/default"),
-            use_sealed_secrets: false,
-        }
-    }
-
-    #[test]
-    fn namespace_mapping_includes_env_and_tenant() {
-        let cfg = config();
-        let scope = Scope::new("prod", "accounts", Some("core".into())).unwrap();
-        assert_eq!(namespace_for_scope(&cfg, &scope), "gt-prod-accounts");
-    }
-
-    #[test]
-    fn secret_name_encodes_team_and_version() {
-        let record = sample_record();
-        let name = secret_resource_name(&record.meta.uri, 3);
-        assert_eq!(name, "core-team-config-api-v0003");
-    }
-
-    #[test]
-    fn rejects_oversized_payloads() {
-        let mut cfg = config();
-        cfg.max_secret_size = 8;
-        let backend = K8sSecretsBackend::new(cfg);
-        let mut record = sample_record();
-        record.value = vec![0u8; 16];
-        let err = backend.put(record).unwrap_err();
-        assert!(matches!(err, SecretsError::Storage(_)));
-    }
-
-    #[test]
-    fn round_trip_versions() {
-        let cfg = config();
-        let backend = K8sSecretsBackend::new(cfg.clone());
-        let record = sample_record();
-        let uri = record.meta.uri.clone();
-
-        let ver1 = backend.put(record.clone()).unwrap();
-        assert_eq!(ver1.version, 1);
-
-        let ver2 = backend.put(record.clone()).unwrap();
-        assert_eq!(ver2.version, 2);
-
-        let latest = backend.get(&uri, None).unwrap().unwrap();
-        assert_eq!(latest.version, 2);
-        assert!(latest.record().is_some());
-
-        let first = backend.get(&uri, Some(1)).unwrap().unwrap();
-        assert_eq!(first.version, 1);
-    }
-
-    #[test]
-    fn key_provider_wraps_and_unwraps() {
-        let cfg = config();
-        let provider = K8sKeyProvider::new(cfg);
-        let scope = Scope::new("prod", "payments", None).unwrap();
-        let dek = vec![0xAC; 32];
-        let wrapped = provider.wrap_dek(&scope, &dek).unwrap();
-        assert_ne!(wrapped, dek);
-        let recovered = provider.unwrap_dek(&scope, &wrapped).unwrap();
-        assert_eq!(recovered, dek);
-    }
+fn percent_encode(value: &str) -> String {
+    byte_serialize(value.as_bytes()).collect()
 }

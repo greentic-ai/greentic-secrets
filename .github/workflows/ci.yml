@@ -1,11 +1,8 @@
 name: CI
-
-on:
-  push:
-  pull_request:
+on: [push, pull_request]
 
 jobs:
-  build:
+  fast:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,12 +10,31 @@ jobs:
       - run: cargo build --workspace --all-features
       - run: cargo test --workspace --all-features
 
-  conformance:
+  local-providers:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        features: ["provider-dev"]
+        provider: [dev, k8s, vault]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo run -p greentic-secrets-conformance --features ${{ matrix.features }}
+
+      - if: matrix.provider == 'k8s'
+        name: Start KinD
+        uses: helm/kind-action@v1
+
+      - if: matrix.provider == 'vault'
+        name: Start Vault dev
+        run: |
+          docker run -d --name vault -e VAULT_DEV_ROOT_TOKEN_ID=root -p 8200:8200 hashicorp/vault:1.16
+          echo "VAULT_ADDR=http://127.0.0.1:8200" >> $GITHUB_ENV
+          echo "VAULT_TOKEN=root" >> $GITHUB_ENV
+          for i in {1..20}; do curl -fsS $VAULT_ADDR/v1/sys/health && break || sleep 1; done
+
+      - name: Conformance
+        run: |
+          case "${{ matrix.provider }}" in
+            dev)   cargo run -p greentic-secrets-conformance --features provider-dev ;;
+            k8s)   cargo run -p greentic-secrets-conformance --features provider-k8s ;;
+            vault) cargo run -p greentic-secrets-conformance --features provider-vault ;;
+          esac

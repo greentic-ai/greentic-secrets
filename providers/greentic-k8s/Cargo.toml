@@ -20,9 +20,10 @@ sealedsecrets = []
 
 [dependencies]
 anyhow = { workspace = true }
-async-trait = "0.1"
 base64 = "0.22.1"
 greentic_secrets_spec = { workspace = true }
-rand = "0.9.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 serde = { workspace = true }
-tracing = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+url = "2"

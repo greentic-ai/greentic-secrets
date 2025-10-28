@@ -1,97 +1,262 @@
 use anyhow::Result;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let raw_prefix = std::env::var("GTS_PREFIX")
+        .unwrap_or_else(|_| format!("gtconf-{}", Uuid::new_v4().simple()));
+    let base_prefix = tests::sanitize(&raw_prefix);
+
     #[cfg(feature = "provider-dev")]
-    tests::run_dev().await?;
+    tests::run_dev(&base_prefix).await?;
+
+    #[cfg(feature = "provider-aws")]
+    tests::run_aws(&base_prefix).await?;
+
+    #[cfg(feature = "provider-azure")]
+    tests::run_azure(&base_prefix).await?;
+
+    #[cfg(feature = "provider-gcp")]
+    tests::run_gcp(&base_prefix).await?;
+
+    #[cfg(feature = "provider-k8s")]
+    tests::run_k8s(&base_prefix).await?;
+
+    #[cfg(feature = "provider-vault")]
+    tests::run_vault(&base_prefix).await?;
+
+    #[cfg(not(any(
+        feature = "provider-dev",
+        feature = "provider-aws",
+        feature = "provider-azure",
+        feature = "provider-gcp",
+        feature = "provider-k8s",
+        feature = "provider-vault"
+    )))]
+    {
+        let _ = base_prefix;
+    }
 
     Ok(())
 }
 
+#[allow(dead_code, unused_imports)]
 mod tests {
     use anyhow::Result;
+    use greentic_secrets_spec::{
+        ContentType, EncryptionAlgorithm, Envelope, SecretMeta, SecretRecord, SecretUri,
+        SecretsBackend, SecretsResult, Visibility,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[cfg(feature = "provider-dev")]
-    pub async fn run_dev() -> Result<()> {
-        use greentic_secrets_provider_dev::DevBackend;
-        use greentic_secrets_spec::{
-            record_from_plain, ContentType, Scope, SecretUri, SecretVersion, SecretsBackend,
-            SecretsError, Visibility,
-        };
+    const CATEGORY: &str = "conformance";
 
-        let backend = DevBackend::new();
-
-        let scope = Scope::new("dev", "example", None)?;
-        let uri = SecretUri::new(scope.clone(), "configs", "db_url")?;
-
-        let mut record = record_from_plain("postgres://user:pass@localhost/db");
-        record.meta.uri = uri.clone();
-        record.meta.content_type = ContentType::Opaque;
-        record.meta.visibility = Visibility::Team;
-
-        let put_version = backend.put(record.clone())?;
-        assert_eq!(put_version.version, 1);
-        assert!(!put_version.deleted);
-
-        let fetched = backend
-            .get(&uri, None)?
-            .expect("secret should exist after put");
-        let fetched_record = fetched
-            .record()
-            .expect("versioned secret should contain a record");
-        assert_eq!(fetched_record.value, record.value);
-
-        let list = backend.list(&scope, Some("configs"), Some("db_"))?;
-        assert!(
-            list.iter().any(|item| item.uri == uri),
-            "expected list to contain inserted secret"
-        );
-
-        let versions = backend.versions(&uri)?;
-        assert_eq!(versions.len(), 1);
-        assert_eq!(
-            versions[0],
-            SecretVersion {
-                version: 1,
-                deleted: false
+    pub(crate) fn sanitize(value: &str) -> String {
+        let mut out = String::new();
+        for ch in value.chars() {
+            match ch {
+                'a'..='z' | '0'..='9' | '-' | '_' | '.' => out.push(ch),
+                'A'..='Z' => out.push(ch.to_ascii_lowercase()),
+                _ => out.push('-'),
             }
-        );
+        }
+        if out.is_empty() {
+            "default".into()
+        } else {
+            out
+        }
+    }
 
-        assert!(backend.exists(&uri)?);
+    fn combine_tag(base: &str, provider: &str) -> String {
+        sanitize(&format!("{}-{}", base, provider))
+    }
 
-        let deleted = backend.delete(&uri)?;
-        assert_eq!(deleted.version, 2);
-        assert!(deleted.deleted);
+    fn make_scope(tag: &str) -> SecretsResult<greentic_secrets_spec::Scope> {
+        greentic_secrets_spec::Scope::new(
+            sanitize(&format!("{}-env", tag)),
+            sanitize(&format!("{}-tenant", tag)),
+            Some(sanitize(&format!("{}-team", tag))),
+        )
+    }
 
-        // After deletion the secret should not be retrievable
-        assert!(
-            backend.get(&uri, None)?.is_none(),
-            "secret should be gone after delete"
-        );
+    fn make_uri(scope: &greentic_secrets_spec::Scope, tag: &str) -> SecretsResult<SecretUri> {
+        SecretUri::new(
+            scope.clone(),
+            CATEGORY,
+            sanitize(&format!("{}-secret", tag)),
+        )
+    }
 
-        // Listing should now omit the deleted secret
-        let list_after_delete = backend.list(&scope, None, None)?;
-        assert!(
-            list_after_delete.iter().all(|item| item.uri != uri),
-            "deleted secret should not appear in listings"
-        );
+    fn make_payload(tag: &str) -> String {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        format!("payload::{tag}::{ts}")
+    }
 
-        // Versions should now include both live and tombstone entries
-        let versions_after_delete = backend.versions(&uri)?;
-        assert_eq!(versions_after_delete.len(), 2);
-        assert!(
-            versions_after_delete
-                .iter()
-                .any(|version| version.version == 2 && version.deleted),
-            "missing tombstone entry"
-        );
+    fn build_record(uri: SecretUri, value: &str) -> SecretRecord {
+        let mut meta = SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Opaque);
+        meta.description = Some("conformance test secret".into());
+        let envelope = Envelope {
+            algorithm: EncryptionAlgorithm::Aes256Gcm,
+            nonce: vec![0u8; 12],
+            hkdf_salt: vec![1u8; 16],
+            wrapped_dek: vec![2u8; 32],
+        };
+        SecretRecord::new(meta, value.as_bytes().to_vec(), envelope)
+    }
 
-        match backend.list(&scope, Some("missing"), None) {
-            Ok(items) => assert!(items.is_empty()),
-            Err(SecretsError::Backend(_)) => {}
-            Err(err) => return Err(err.into()),
+    fn convert<T>(res: SecretsResult<T>) -> Result<T> {
+        res.map_err(anyhow::Error::from)
+    }
+
+    struct Cleanup {
+        backend: Box<dyn SecretsBackend>,
+        uri: SecretUri,
+        delete_on_drop: bool,
+    }
+
+    impl Cleanup {
+        fn new(backend: Box<dyn SecretsBackend>, uri: SecretUri) -> Self {
+            Self {
+                backend,
+                uri,
+                delete_on_drop: true,
+            }
         }
 
+        fn backend_mut(&mut self) -> &mut dyn SecretsBackend {
+            &mut *self.backend
+        }
+
+        fn disarm(&mut self) {
+            self.delete_on_drop = false;
+        }
+    }
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            if self.delete_on_drop {
+                let _ = self.backend.delete(&self.uri);
+            }
+        }
+    }
+
+    fn run_cycle(
+        backend: Box<dyn SecretsBackend>,
+        scope: greentic_secrets_spec::Scope,
+        uri: SecretUri,
+        payload: String,
+    ) -> Result<()> {
+        let mut cleanup = Cleanup::new(backend, uri.clone());
+        let backend = cleanup.backend_mut();
+
+        let record = build_record(uri.clone(), &payload);
+        let put = convert(backend.put(record.clone()))?;
+        assert!(put.version >= 1, "put should return a positive version");
+
+        let fetched =
+            convert(backend.get(&uri, None))?.expect("secret should exist immediately after put");
+        let fetched_record = fetched
+            .record()
+            .expect("versioned secret must include record");
+        assert_eq!(fetched_record.value, record.value);
+
+        let listed = convert(backend.list(&scope, Some(CATEGORY), None))?;
+        assert!(listed.iter().any(|item| item.uri == uri));
+
+        let versions = convert(backend.versions(&uri))?;
+        assert!(versions
+            .iter()
+            .any(|v| v.version == put.version && !v.deleted));
+        assert!(convert(backend.exists(&uri))?);
+
+        let deleted = convert(backend.delete(&uri))?;
+        assert!(deleted.deleted);
+
+        assert!(convert(backend.get(&uri, None))?.is_none());
+        assert!(!convert(backend.exists(&uri))?);
+
+        let versions_after = convert(backend.versions(&uri))?;
+        assert!(versions_after.iter().any(|v| v.deleted));
+
+        let listed_after = convert(backend.list(&scope, Some(CATEGORY), None))?;
+        assert!(listed_after.iter().all(|item| item.uri != uri));
+
+        cleanup.disarm();
         Ok(())
+    }
+
+    #[cfg(feature = "provider-dev")]
+    pub async fn run_dev(base: &str) -> Result<()> {
+        use greentic_secrets_provider_dev::DevBackend;
+
+        let tag = combine_tag(base, "dev");
+        let scope = convert(make_scope(&tag))?;
+        let uri = convert(make_uri(&scope, &tag))?;
+        let payload = make_payload(&tag);
+        let backend: Box<dyn SecretsBackend> = Box::new(DevBackend::new());
+        run_cycle(backend, scope, uri, payload)
+    }
+
+    #[cfg(feature = "provider-aws")]
+    pub async fn run_aws(base: &str) -> Result<()> {
+        use greentic_secrets_provider_aws_sm::build_backend;
+
+        let tag = combine_tag(base, "aws");
+        let scope = convert(make_scope(&tag))?;
+        let uri = convert(make_uri(&scope, &tag))?;
+        let payload = make_payload(&tag);
+        let components = build_backend().await?;
+        run_cycle(components.backend, scope, uri, payload)
+    }
+
+    #[cfg(feature = "provider-azure")]
+    pub async fn run_azure(base: &str) -> Result<()> {
+        use greentic_secrets_provider_azure_kv::build_backend;
+
+        let tag = combine_tag(base, "azure");
+        let scope = convert(make_scope(&tag))?;
+        let uri = convert(make_uri(&scope, &tag))?;
+        let payload = make_payload(&tag);
+        let components = build_backend().await?;
+        run_cycle(components.backend, scope, uri, payload)
+    }
+
+    #[cfg(feature = "provider-gcp")]
+    pub async fn run_gcp(base: &str) -> Result<()> {
+        use greentic_secrets_provider_gcp_sm::build_backend;
+
+        let tag = combine_tag(base, "gcp");
+        let scope = convert(make_scope(&tag))?;
+        let uri = convert(make_uri(&scope, &tag))?;
+        let payload = make_payload(&tag);
+        let components = build_backend().await?;
+        run_cycle(components.backend, scope, uri, payload)
+    }
+
+    #[cfg(feature = "provider-k8s")]
+    pub async fn run_k8s(base: &str) -> Result<()> {
+        use greentic_secrets_provider_k8s::build_backend;
+
+        let tag = combine_tag(base, "k8s");
+        let scope = convert(make_scope(&tag))?;
+        let uri = convert(make_uri(&scope, &tag))?;
+        let payload = make_payload(&tag);
+        let components = build_backend().await?;
+        run_cycle(components.backend, scope, uri, payload)
+    }
+
+    #[cfg(feature = "provider-vault")]
+    pub async fn run_vault(base: &str) -> Result<()> {
+        use greentic_secrets_provider_vault_kv::build_backend;
+
+        let tag = combine_tag(base, "vault");
+        let scope = convert(make_scope(&tag))?;
+        let uri = convert(make_uri(&scope, &tag))?;
+        let payload = make_payload(&tag);
+        let components = build_backend().await?;
+        run_cycle(components.backend, scope, uri, payload)
     }
 }

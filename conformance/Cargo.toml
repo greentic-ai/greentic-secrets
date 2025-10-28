@@ -9,7 +9,18 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 anyhow = "1"
 greentic_secrets_spec = { workspace = true }
 greentic_secrets_provider_dev = { workspace = true, optional = true }
+greentic_secrets_provider_aws_sm = { workspace = true, optional = true }
+greentic_secrets_provider_azure_kv = { workspace = true, optional = true }
+greentic_secrets_provider_gcp_sm = { workspace = true, optional = true }
+greentic_secrets_provider_k8s = { workspace = true, optional = true }
+greentic_secrets_provider_vault_kv = { workspace = true, optional = true }
+uuid = { version = "1", features = ["v4"] }
 
 [features]
 default = []
 provider-dev = ["greentic_secrets_provider_dev"]
+provider-aws = ["greentic_secrets_provider_aws_sm"]
+provider-azure = ["greentic_secrets_provider_azure_kv"]
+provider-gcp = ["greentic_secrets_provider_gcp_sm"]
+provider-k8s = ["greentic_secrets_provider_k8s"]
+provider-vault = ["greentic_secrets_provider_vault_kv"]

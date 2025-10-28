@@ -1,22 +1,29 @@
-//! Simplified Google Secret Manager backend implementation.
+//! Google Secret Manager provider backed by the real GCP APIs.
 //!
-//! This mirrors the interface expected from GCP Secret Manager and Cloud KMS
-//! using purely in-memory data structures, enabling feature-gated builds and
-//! tests without external dependencies.
+//! The implementation talks to Secret Manager and Cloud KMS over HTTPS using
+//! a bearer token supplied via environment variables. Secret payloads store the
+//! full [`SecretRecord`] structure serialized as JSON so we can faithfully
+//! restore metadata when reading secrets back.
 
-use anyhow::Result;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use greentic_secrets_spec::prelude::*;
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use greentic_secrets_spec::{
-    KeyProvider, Scope, SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
+    KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
+    SecretsError, SecretsResult, VersionedSecret,
 };
-use rand::{rng, Rng};
+use reqwest::blocking::Client;
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use serde_json::{json, Value};
+use std::env;
+use std::sync::Arc;
+use std::time::Duration;
 
+const SECRET_MANAGER_ENDPOINT: &str = "https://secretmanager.googleapis.com/v1";
+const KMS_ENDPOINT: &str = "https://cloudkms.googleapis.com/v1";
 const DEFAULT_PREFIX: &str = "greentic";
+const TEAM_PLACEHOLDER: &str = "_";
+const DEFAULT_TIMEOUT_SECS: u64 = 15;
 
 /// Components returned to the broker wiring.
 pub struct BackendComponents {
@@ -24,11 +31,17 @@ pub struct BackendComponents {
     pub key_provider: Box<dyn KeyProvider>,
 }
 
-/// Construct the in-memory backend using environment configuration.
+/// Construct the GCP backend using environment configuration.
 pub async fn build_backend() -> Result<BackendComponents> {
-    let config = GcpProviderConfig::from_env()?;
-    let backend = GcpSecretsBackend::new(config.clone());
-    let key_provider = GcpKmsKeyProvider::new(config);
+    let config = Arc::new(GcpProviderConfig::from_env()?);
+    let client = Client::builder()
+        .timeout(config.timeout)
+        .build()
+        .context("failed to build reqwest client for GCP provider")?;
+
+    let backend = GcpSecretsBackend::new(config.clone(), client.clone());
+    let key_provider = GcpKmsKeyProvider::new(config, client);
+
     Ok(BackendComponents {
         backend: Box::new(backend),
         key_provider: Box::new(key_provider),
@@ -36,42 +49,334 @@ pub async fn build_backend() -> Result<BackendComponents> {
 }
 
 #[derive(Clone)]
+struct GcpProviderConfig {
+    project: String,
+    secret_prefix: String,
+    kms_key_name: String,
+    access_token: String,
+    secret_endpoint: String,
+    kms_endpoint: String,
+    timeout: Duration,
+}
+
+impl GcpProviderConfig {
+    fn from_env() -> Result<Self> {
+        let project = env::var("GREENTIC_GCP_PROJECT")
+            .or_else(|_| env::var("GCP_PROJECT"))
+            .context("set GREENTIC_GCP_PROJECT or GCP_PROJECT with your project id")?;
+
+        let kms_key_name = env::var("GREENTIC_GCP_KMS_KEY")
+            .context("set GREENTIC_GCP_KMS_KEY with the full Cloud KMS key resource")?;
+
+        let access_token = env::var("GREENTIC_GCP_ACCESS_TOKEN")
+            .or_else(|_| env::var("GOOGLE_OAUTH_ACCESS_TOKEN"))
+            .context("set GREENTIC_GCP_ACCESS_TOKEN (or GOOGLE_OAUTH_ACCESS_TOKEN) with a valid bearer token")?;
+
+        let secret_prefix = env::var("GREENTIC_GCP_SECRET_PREFIX")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_PREFIX.to_string());
+
+        let secret_endpoint = env::var("GREENTIC_GCP_SM_ENDPOINT")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| SECRET_MANAGER_ENDPOINT.to_string());
+
+        let kms_endpoint = env::var("GREENTIC_GCP_KMS_ENDPOINT")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| KMS_ENDPOINT.to_string());
+
+        let timeout = env::var("GREENTIC_GCP_HTTP_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .and_then(|secs| {
+                if secs == 0 {
+                    None
+                } else {
+                    Some(Duration::from_secs(secs))
+                }
+            })
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+
+        Ok(Self {
+            project,
+            secret_prefix,
+            kms_key_name,
+            access_token,
+            secret_endpoint,
+            kms_endpoint,
+            timeout,
+        })
+    }
+
+    fn bearer(&self) -> String {
+        format!("Bearer {}", self.access_token)
+    }
+}
+
+#[derive(Clone)]
 pub struct GcpSecretsBackend {
-    config: GcpProviderConfig,
-    store: Arc<Mutex<HashMap<String, Vec<StoredSecret>>>>,
+    config: Arc<GcpProviderConfig>,
+    client: Client,
 }
 
 impl GcpSecretsBackend {
-    pub(crate) fn new(config: GcpProviderConfig) -> Self {
-        Self {
-            config,
-            store: Arc::new(Mutex::new(HashMap::new())),
-        }
+    fn new(config: Arc<GcpProviderConfig>, client: Client) -> Self {
+        Self { config, client }
     }
 
-    fn secret_name(&self, uri: &SecretUri) -> String {
+    fn secret_id(&self, uri: &SecretUri) -> String {
+        let sanitize = |value: &str| {
+            value
+                .chars()
+                .map(|c| match c {
+                    '0'..='9' | 'a'..='z' | 'A'..='Z' | '-' => c,
+                    '_' => '_',
+                    _ => '-',
+                })
+                .collect::<String>()
+                .to_lowercase()
+        };
+
+        let mut id = format!(
+            "{}-{}-{}-{}-{}-{}",
+            sanitize(&self.config.secret_prefix),
+            sanitize(uri.scope().env()),
+            sanitize(uri.scope().tenant()),
+            uri.scope()
+                .team()
+                .map(sanitize)
+                .unwrap_or_else(|| TEAM_PLACEHOLDER.to_string()),
+            sanitize(uri.category()),
+            sanitize(uri.name()),
+        );
+
+        if id.len() > 250 {
+            id.truncate(250);
+        }
+        id
+    }
+
+    fn secret_resource(&self, secret_id: &str) -> String {
         format!(
-            "projects/{}/secrets/{}/{}/{}/{}",
-            self.config.project,
-            self.config.secret_prefix,
-            uri.scope().env(),
-            uri.scope().tenant(),
-            uri.name()
+            "{}/projects/{}/secrets/{}",
+            self.config.secret_endpoint, self.config.project, secret_id
         )
     }
 
-    fn matches_scope(name: &str, scope: &Scope) -> bool {
-        name.contains(scope.env()) && name.contains(scope.tenant())
+    fn request(
+        &self,
+        method: Method,
+        url: String,
+        body: Option<Value>,
+    ) -> SecretsResult<reqwest::blocking::Response> {
+        let builder = match method {
+            Method::GET => self.client.get(url),
+            Method::POST => self.client.post(url),
+            Method::DELETE => self.client.delete(url),
+            Method::PUT => self.client.put(url),
+            other => self.client.request(other, url),
+        };
+
+        let builder = builder.header("Authorization", self.config.bearer());
+        let builder = if let Some(payload) = body {
+            builder.json(&payload)
+        } else {
+            builder
+        };
+
+        builder
+            .send()
+            .map_err(|err| SecretsError::Storage(format!("http request failed: {err}")))
+    }
+
+    fn ensure_secret_exists(&self, secret_id: &str) -> SecretsResult<()> {
+        let url = format!(
+            "{}/projects/{}/secrets?secretId={}",
+            self.config.secret_endpoint, self.config.project, secret_id
+        );
+        let body = json!({
+            "replication": {"automatic": {}},
+        });
+
+        let response = self.request(Method::POST, url, Some(body))?;
+        match response.status() {
+            StatusCode::OK | StatusCode::CREATED => Ok(()),
+            StatusCode::CONFLICT => Ok(()),
+            status => {
+                let details = response.text().unwrap_or_default();
+                Err(SecretsError::Storage(format!(
+                    "create secret {secret_id} failed: {status} {details}"
+                )))
+            }
+        }
+    }
+
+    fn write_version(&self, secret_id: &str, payload: &StoredSecret) -> SecretsResult<u64> {
+        let resource = self.secret_resource(secret_id);
+        let encoded = encode_secret(payload)?;
+        let url = format!("{}:addVersion", resource);
+        let body = json!({
+            "payload": {
+                "data": STANDARD.encode(encoded),
+            }
+        });
+
+        let response = self.request(Method::POST, url, Some(body))?;
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(SecretsError::Storage(format!(
+                "add secret version failed: {status} {text}"
+            )));
+        }
+
+        let parsed: SecretVersionCreateResponse = serde_json::from_str(&text).map_err(|err| {
+            SecretsError::Storage(format!(
+                "failed to parse addVersion response: {err}; body={text}"
+            ))
+        })?;
+        parse_version_from_name(&parsed.name)
+    }
+
+    fn fetch_version_by_name(&self, name: &str) -> SecretsResult<Option<StoredSecret>> {
+        let url = format!("{}:access", name);
+        let response = self.request(Method::GET, url, None)?;
+        match response.status() {
+            StatusCode::NOT_FOUND => Ok(None),
+            status if status.is_success() => {
+                let body = response.text().unwrap_or_default();
+                let parsed: AccessSecretVersionResponse =
+                    serde_json::from_str(&body).map_err(|err| {
+                        SecretsError::Storage(format!(
+                            "failed to decode access response: {err}; body={body}"
+                        ))
+                    })?;
+                let data = parsed
+                    .payload
+                    .and_then(|payload| payload.data)
+                    .ok_or_else(|| SecretsError::Storage("secret payload missing data".into()))?;
+                let decoded = STANDARD
+                    .decode(data)
+                    .map_err(|err| SecretsError::Storage(format!("base64 decode failed: {err}")))?;
+                let stored: StoredSecret = serde_json::from_slice(&decoded).map_err(|err| {
+                    SecretsError::Storage(format!("failed to parse stored secret: {err}"))
+                })?;
+                Ok(Some(stored))
+            }
+            status => {
+                let text = response.text().unwrap_or_default();
+                Err(SecretsError::Storage(format!(
+                    "access secret version failed: {status} {text}"
+                )))
+            }
+        }
+    }
+
+    fn load_all_versions(&self, secret_id: &str) -> SecretsResult<Vec<StoredSecret>> {
+        let resource = self.secret_resource(secret_id);
+        let mut collected = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        loop {
+            let mut url = format!("{}/versions?pageSize=100", resource);
+            if let Some(token) = &page_token {
+                url.push_str("&pageToken=");
+                url.push_str(token);
+            }
+
+            let response = self.request(Method::GET, url, None)?;
+            match response.status() {
+                StatusCode::NOT_FOUND => return Ok(Vec::new()),
+                status if status.is_success() => {
+                    let body = response.text().unwrap_or_default();
+                    let parsed: SecretVersionsListResponse =
+                        serde_json::from_str(&body).map_err(|err| {
+                            SecretsError::Storage(format!(
+                                "failed to parse versions list: {err}; body={body}"
+                            ))
+                        })?;
+
+                    if let Some(entries) = parsed.versions {
+                        for entry in entries {
+                            if let Some(stored) = self.fetch_version_by_name(&entry.name)? {
+                                collected.push(stored);
+                            }
+                        }
+                    }
+
+                    if let Some(next) = parsed.next_page_token {
+                        page_token = Some(next);
+                        continue;
+                    }
+                    break;
+                }
+                status => {
+                    let text = response.text().unwrap_or_default();
+                    return Err(SecretsError::Storage(format!(
+                        "list secret versions failed: {status} {text}"
+                    )));
+                }
+            }
+        }
+
+        collected.sort_by_key(|item| item.version);
+        Ok(collected)
+    }
+
+    fn fetch_latest(&self, secret_id: &str) -> SecretsResult<Option<StoredSecret>> {
+        let resource = self.secret_resource(secret_id);
+        let url = format!("{}/versions/latest:access", resource);
+        let response = self.request(Method::GET, url, None)?;
+        match response.status() {
+            StatusCode::NOT_FOUND => Ok(None),
+            status if status.is_success() => {
+                let body = response.text().unwrap_or_default();
+                let parsed: AccessSecretVersionResponse =
+                    serde_json::from_str(&body).map_err(|err| {
+                        SecretsError::Storage(format!(
+                            "failed to decode access response: {err}; body={body}"
+                        ))
+                    })?;
+                let payload = parsed
+                    .payload
+                    .and_then(|p| p.data)
+                    .ok_or_else(|| SecretsError::Storage("secret payload missing data".into()))?;
+                let decoded = STANDARD
+                    .decode(payload)
+                    .map_err(|err| SecretsError::Storage(format!("base64 decode failed: {err}")))?;
+                let stored: StoredSecret = serde_json::from_slice(&decoded).map_err(|err| {
+                    SecretsError::Storage(format!("failed to parse stored secret: {err}"))
+                })?;
+                Ok(Some(stored))
+            }
+            status => {
+                let text = response.text().unwrap_or_default();
+                Err(SecretsError::Storage(format!(
+                    "access latest secret version failed: {status} {text}"
+                )))
+            }
+        }
     }
 }
 
 impl SecretsBackend for GcpSecretsBackend {
     fn put(&self, record: SecretRecord) -> SecretsResult<SecretVersion> {
-        let mut guard = self.store.lock().unwrap();
-        let name = self.secret_name(&record.meta.uri);
-        let entry = guard.entry(name).or_default();
-        let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
-        entry.push(StoredSecret::from_record(&record, false)?.with_version(next_version));
+        let secret_id = self.secret_id(&record.meta.uri);
+        self.ensure_secret_exists(&secret_id)?;
+
+        let versions = self.load_all_versions(&secret_id)?;
+        let next_version = versions
+            .iter()
+            .map(|stored| stored.version)
+            .max()
+            .unwrap_or(0)
+            + 1;
+
+        let stored = StoredSecret::live(next_version, record.clone());
+        self.write_version(&secret_id, &stored)?;
+
         Ok(SecretVersion {
             version: next_version,
             deleted: false,
@@ -79,68 +384,105 @@ impl SecretsBackend for GcpSecretsBackend {
     }
 
     fn get(&self, uri: &SecretUri, version: Option<u64>) -> SecretsResult<Option<VersionedSecret>> {
-        let guard = self.store.lock().unwrap();
-        let entry = match guard.get(&self.secret_name(uri)) {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        let stored = match version {
-            Some(v) => entry.iter().find(|item| item.version == v).cloned(),
-            None => entry.last().cloned(),
-        };
-        Ok(match stored {
-            None => None,
-            Some(secret) => Some(secret.into_versioned()?),
-        })
+        let secret_id = self.secret_id(uri);
+        if let Some(requested) = version {
+            let versions = self.load_all_versions(&secret_id)?;
+            return Ok(versions
+                .into_iter()
+                .find(|stored| stored.version == requested && !stored.deleted)
+                .and_then(|stored| stored.into_versioned()));
+        }
+
+        match self.fetch_latest(&secret_id)? {
+            Some(stored) if !stored.deleted => Ok(stored.into_versioned()),
+            _ => Ok(None),
+        }
     }
 
     fn list(
         &self,
         scope: &Scope,
-        category_prefix: Option<&str>,
-        name_prefix: Option<&str>,
+        _category_prefix: Option<&str>,
+        _name_prefix: Option<&str>,
     ) -> SecretsResult<Vec<SecretListItem>> {
-        let guard = self.store.lock().unwrap();
+        let filter = format!(
+            "name:{}-{}-{}",
+            self.config.secret_prefix,
+            scope.env(),
+            scope.tenant()
+        );
+        let url = format!(
+            "{}/projects/{}/secrets",
+            self.config.secret_endpoint, self.config.project
+        );
+
+        let response = self
+            .client
+            .get(url)
+            .header("Authorization", self.config.bearer())
+            .query(&[("filter", filter.as_str())])
+            .send()
+            .map_err(|err| SecretsError::Storage(format!("list secrets request failed: {err}")))?;
+
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(SecretsError::Storage(format!(
+                "list secrets failed: {status} {body}"
+            )));
+        }
+        let parsed: SecretListResponse = serde_json::from_str(&body).map_err(|err| {
+            SecretsError::Storage(format!(
+                "failed to decode list secrets response: {err}; body={body}"
+            ))
+        })?;
+
         let mut items = Vec::new();
-        for (name, versions) in guard.iter() {
-            if !Self::matches_scope(name, scope) {
-                continue;
-            }
-            if let Some(latest) = versions.last() {
-                if latest.deleted {
+        if let Some(secrets) = parsed.secrets {
+            for entry in secrets {
+                let segments: Vec<&str> = entry.name.split('/').collect();
+                if segments.len() < 4 {
                     continue;
                 }
-                if let Some(item) = latest.clone().into_list_item()? {
-                    if category_prefix
-                        .map(|prefix| !item.uri.category().starts_with(prefix))
-                        .unwrap_or(false)
-                    {
+                let secret_id = segments
+                    .last()
+                    .copied()
+                    .unwrap_or_else(|| entry.name.as_str());
+                if let Some(stored) = self.fetch_latest(secret_id)? {
+                    if stored.deleted {
                         continue;
                     }
-                    if name_prefix
-                        .map(|prefix| !item.uri.name().starts_with(prefix))
-                        .unwrap_or(false)
-                    {
-                        continue;
+                    if let Some(record) = stored.record {
+                        items.push(SecretListItem::from_meta(
+                            &record.meta,
+                            Some(stored.version.to_string()),
+                        ));
                     }
-                    items.push(item);
                 }
             }
         }
+
         Ok(items)
     }
 
     fn delete(&self, uri: &SecretUri) -> SecretsResult<SecretVersion> {
-        let mut guard = self.store.lock().unwrap();
-        let entry = guard
-            .get_mut(&self.secret_name(uri))
-            .ok_or_else(|| SecretsError::Storage("secret does not exist".into()))?;
-        let next_version = entry.last().map(|s| s.version + 1).unwrap_or(1);
-        entry.push(StoredSecret {
-            version: next_version,
-            deleted: true,
-            record: None,
-        });
+        let secret_id = self.secret_id(uri);
+        let versions = self.load_all_versions(&secret_id)?;
+        if versions.is_empty() {
+            return Err(SecretsError::NotFound {
+                entity: uri.to_string(),
+            });
+        }
+
+        let next_version = versions
+            .iter()
+            .map(|stored| stored.version)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let tombstone = StoredSecret::tombstone(next_version);
+        self.write_version(&secret_id, &tombstone)?;
+
         Ok(SecretVersion {
             version: next_version,
             deleted: true,
@@ -148,332 +490,180 @@ impl SecretsBackend for GcpSecretsBackend {
     }
 
     fn versions(&self, uri: &SecretUri) -> SecretsResult<Vec<SecretVersion>> {
-        let guard = self.store.lock().unwrap();
-        Ok(guard
-            .get(&self.secret_name(uri))
-            .cloned()
-            .unwrap_or_default()
+        let secret_id = self.secret_id(uri);
+        Ok(self
+            .load_all_versions(&secret_id)?
             .into_iter()
-            .map(|secret| SecretVersion {
-                version: secret.version,
-                deleted: secret.deleted,
+            .map(|stored| SecretVersion {
+                version: stored.version,
+                deleted: stored.deleted,
             })
             .collect())
     }
 
     fn exists(&self, uri: &SecretUri) -> SecretsResult<bool> {
-        let guard = self.store.lock().unwrap();
-        Ok(guard
-            .get(&self.secret_name(uri))
-            .and_then(|versions| versions.last())
-            .map(|secret| !secret.deleted)
-            .unwrap_or(false))
+        Ok(self.get(uri, None)?.is_some())
     }
 }
 
 #[derive(Clone)]
 pub struct GcpKmsKeyProvider {
-    config: GcpProviderConfig,
-    kek_store: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    config: Arc<GcpProviderConfig>,
+    client: Client,
 }
 
 impl GcpKmsKeyProvider {
-    pub(crate) fn new(config: GcpProviderConfig) -> Self {
-        Self {
-            config,
-            kek_store: Arc::new(Mutex::new(HashMap::new())),
-        }
+    fn new(config: Arc<GcpProviderConfig>, client: Client) -> Self {
+        Self { config, client }
     }
 
-    fn get_or_create_kek(&self, alias: &str) -> Vec<u8> {
-        let mut guard = self.kek_store.lock().unwrap();
-        guard
-            .entry(alias.to_string())
-            .or_insert_with(|| {
-                let mut generator = rng();
-                let mut key = [0u8; 32];
-                generator.fill(&mut key);
-                key.to_vec()
-            })
-            .clone()
+    fn kms_request(&self, action: &str, body: Value) -> SecretsResult<Value> {
+        let url = format!(
+            "{}/{action}",
+            self.config.kms_endpoint.trim_end_matches('/'),
+            action = action
+        );
+        let response = self
+            .client
+            .post(url)
+            .header("Authorization", self.config.bearer())
+            .json(&body)
+            .send()
+            .map_err(|err| SecretsError::Backend(format!("kms request failed: {err}")))?;
+
+        let status = response.status();
+        let text = response.text().unwrap_or_default();
+        if !status.is_success() {
+            return Err(SecretsError::Backend(format!(
+                "kms call failed: {status} {text}"
+            )));
+        }
+
+        serde_json::from_str(&text).map_err(|err| {
+            SecretsError::Backend(format!("failed to parse kms response: {err}; body={text}"))
+        })
     }
 }
 
 impl KeyProvider for GcpKmsKeyProvider {
-    fn wrap_dek(&self, scope: &Scope, dek: &[u8]) -> SecretsResult<Vec<u8>> {
-        let alias = self
-            .config
-            .kms_keys
-            .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| SecretsError::Crypto("missing KMS key".into()))?;
-        let kek = self.get_or_create_kek(alias);
-        Ok(xor(&kek, dek))
+    fn wrap_dek(&self, _scope: &Scope, dek: &[u8]) -> SecretsResult<Vec<u8>> {
+        let payload = json!({
+            "plaintext": STANDARD.encode(dek),
+        });
+        let response =
+            self.kms_request(&format!("{}:encrypt", self.config.kms_key_name), payload)?;
+        let ciphertext = response
+            .get("ciphertext")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                SecretsError::Backend("kms encrypt response missing ciphertext".into())
+            })?;
+        STANDARD
+            .decode(ciphertext)
+            .map_err(|err| SecretsError::Backend(format!("kms ciphertext decode failed: {err}")))
     }
 
-    fn unwrap_dek(&self, scope: &Scope, wrapped: &[u8]) -> SecretsResult<Vec<u8>> {
-        let alias = self
-            .config
-            .kms_keys
-            .resolve(scope.env(), scope.tenant())
-            .ok_or_else(|| SecretsError::Crypto("missing KMS key".into()))?;
-        let kek = self.get_or_create_kek(alias);
-        Ok(xor(&kek, wrapped))
-    }
-}
-
-fn xor(kek: &[u8], data: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(idx, byte)| byte ^ kek[idx % kek.len()])
-        .collect()
-}
-
-fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
-    STANDARD
-        .decode(input.as_bytes())
-        .map_err(|err| SecretsError::Storage(err.to_string()))
-}
-
-#[derive(Clone, Debug)]
-struct GcpProviderConfig {
-    project: String,
-    secret_prefix: String,
-    kms_keys: AliasMap,
-}
-
-impl GcpProviderConfig {
-    fn from_env() -> Result<Self> {
-        let project = std::env::var("GCP_SM_PROJECT")
-            .or_else(|_| std::env::var("GOOGLE_CLOUD_PROJECT"))
-            .unwrap_or_else(|_| "local-project".into());
-        let prefix =
-            std::env::var("GCP_SM_SECRET_PREFIX").unwrap_or_else(|_| DEFAULT_PREFIX.to_string());
-        Ok(Self {
-            project,
-            secret_prefix: prefix,
-            kms_keys: AliasMap::from_env("GCP_KMS_KEY")?,
-        })
+    fn unwrap_dek(&self, _scope: &Scope, wrapped: &[u8]) -> SecretsResult<Vec<u8>> {
+        let payload = json!({
+            "ciphertext": STANDARD.encode(wrapped),
+        });
+        let response =
+            self.kms_request(&format!("{}:decrypt", self.config.kms_key_name), payload)?;
+        let plaintext = response
+            .get("plaintext")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                SecretsError::Backend("kms decrypt response missing plaintext".into())
+            })?;
+        STANDARD
+            .decode(plaintext)
+            .map_err(|err| SecretsError::Backend(format!("kms plaintext decode failed: {err}")))
     }
 }
 
-#[derive(Clone, Debug)]
-struct AliasMap {
-    default: Option<String>,
-    per_env: HashMap<String, String>,
-    per_tenant: HashMap<(String, String), String>,
-}
-
-impl AliasMap {
-    fn from_env(prefix: &str) -> Result<Self> {
-        let default = std::env::var(prefix).ok();
-        let mut per_env = HashMap::new();
-        let mut per_tenant = HashMap::new();
-        for (key, value) in std::env::vars() {
-            if !key.starts_with(prefix) || key == prefix {
-                continue;
-            }
-            let suffix = key.trim_start_matches(prefix).trim_matches('_');
-            if suffix.is_empty() {
-                continue;
-            }
-            let parts: Vec<&str> = suffix.split('_').collect();
-            match parts.as_slice() {
-                [env] => {
-                    per_env.insert(env.to_lowercase(), value.clone());
-                }
-                [env, tenant] => {
-                    per_tenant.insert((env.to_lowercase(), tenant.to_lowercase()), value.clone());
-                }
-                _ => {}
-            }
-        }
-        Ok(Self {
-            default,
-            per_env,
-            per_tenant,
-        })
-    }
-
-    fn resolve(&self, env: &str, tenant: &str) -> Option<&str> {
-        self.per_tenant
-            .get(&(env.to_lowercase(), tenant.to_lowercase()))
-            .or_else(|| self.per_env.get(&env.to_lowercase()))
-            .or(self.default.as_ref())
-            .map(String::as_str)
-    }
-
-    #[cfg(test)]
-    fn with_default(alias: impl Into<String>) -> Self {
-        Self {
-            default: Some(alias.into()),
-            per_env: HashMap::new(),
-            per_tenant: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSecret {
     version: u64,
     deleted: bool,
-    record: Option<StoredRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record: Option<SecretRecord>,
 }
 
 impl StoredSecret {
-    fn from_record(record: &SecretRecord, deleted: bool) -> SecretsResult<Self> {
-        Ok(Self {
-            version: 0,
-            deleted,
-            record: Some(StoredRecord::from_record(record)?),
-        })
-    }
-
-    fn with_version(mut self, version: u64) -> Self {
-        self.version = version;
-        self
-    }
-
-    fn into_versioned(self) -> SecretsResult<VersionedSecret> {
-        if self.deleted {
-            return Ok(VersionedSecret {
-                version: self.version,
-                deleted: true,
-                record: None,
-            });
-        }
-        let record = self
-            .record
-            .ok_or_else(|| SecretsError::Storage("missing record".into()))?
-            .into_record()?;
-        Ok(VersionedSecret {
-            version: self.version,
+    fn live(version: u64, record: SecretRecord) -> Self {
+        Self {
+            version,
             deleted: false,
             record: Some(record),
-        })
-    }
-
-    fn into_list_item(self) -> SecretsResult<Option<SecretListItem>> {
-        if self.deleted {
-            return Ok(None);
         }
-        let record = self
-            .record
-            .ok_or_else(|| SecretsError::Storage("missing record".into()))?;
-        Ok(Some(SecretListItem::from_meta(
-            &record.meta,
-            Some(self.version.to_string()),
-        )))
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct StoredRecord {
-    meta: SecretMeta,
-    envelope: StoredEnvelope,
-    value: String,
-}
-
-impl StoredRecord {
-    fn from_record(record: &SecretRecord) -> SecretsResult<Self> {
-        Ok(Self {
-            meta: record.meta.clone(),
-            envelope: StoredEnvelope::from_envelope(&record.envelope),
-            value: STANDARD.encode(&record.value),
-        })
     }
 
-    fn into_record(self) -> SecretsResult<SecretRecord> {
-        Ok(SecretRecord::new(
-            self.meta,
-            decode_bytes(&self.value)?,
-            self.envelope.into_envelope()?,
-        ))
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct StoredEnvelope {
-    algorithm: String,
-    nonce: String,
-    hkdf_salt: String,
-    wrapped_dek: String,
-}
-
-impl StoredEnvelope {
-    fn from_envelope(envelope: &Envelope) -> Self {
+    fn tombstone(version: u64) -> Self {
         Self {
-            algorithm: envelope.algorithm.to_string(),
-            nonce: STANDARD.encode(&envelope.nonce),
-            hkdf_salt: STANDARD.encode(&envelope.hkdf_salt),
-            wrapped_dek: STANDARD.encode(&envelope.wrapped_dek),
+            version,
+            deleted: true,
+            record: None,
         }
     }
 
-    fn into_envelope(self) -> SecretsResult<Envelope> {
-        Ok(Envelope {
-            algorithm: self
-                .algorithm
-                .parse()
-                .map_err(|_| SecretsError::Storage("invalid algorithm".into()))?,
-            nonce: decode_bytes(&self.nonce)?,
-            hkdf_salt: decode_bytes(&self.hkdf_salt)?,
-            wrapped_dek: decode_bytes(&self.wrapped_dek)?,
+    fn into_versioned(self) -> Option<VersionedSecret> {
+        Some(VersionedSecret {
+            version: self.version,
+            deleted: self.deleted,
+            record: self.record,
         })
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use greentic_secrets_spec::{ContentType, EncryptionAlgorithm, Scope, Visibility};
+fn encode_secret(payload: &StoredSecret) -> SecretsResult<Vec<u8>> {
+    serde_json::to_vec(payload)
+        .map_err(|err| SecretsError::Storage(format!("failed to serialize secret payload: {err}")))
+}
 
-    fn build_record() -> SecretRecord {
-        let scope = Scope::new("staging", "payments", None).unwrap();
-        let uri = SecretUri::new(scope, "config", "service").unwrap();
-        let mut meta = SecretMeta::new(uri, Visibility::Tenant, ContentType::Json);
-        meta.description = Some("test secret".into());
-        let envelope = Envelope {
-            algorithm: EncryptionAlgorithm::Aes256Gcm,
-            nonce: vec![1, 2, 3],
-            hkdf_salt: vec![4, 5, 6],
-            wrapped_dek: vec![7, 8, 9],
-        };
-        SecretRecord::new(meta, vec![42, 43, 44], envelope)
-    }
+fn parse_version_from_name(name: &str) -> SecretsResult<u64> {
+    name.rsplit('/')
+        .next()
+        .ok_or_else(|| SecretsError::Storage(format!("invalid version name: {name}")))?
+        .parse::<u64>()
+        .map_err(|err| SecretsError::Storage(format!("invalid version number: {err}")))
+}
 
-    #[test]
-    fn put_and_list() {
-        let config = GcpProviderConfig {
-            project: "proj".into(),
-            secret_prefix: "prefix".into(),
-            kms_keys: AliasMap::with_default(
-                "projects/proj/locations/global/keyRings/default/cryptoKeys/app",
-            ),
-        };
-        let backend = GcpSecretsBackend::new(config);
+#[derive(Deserialize)]
+struct SecretVersionCreateResponse {
+    name: String,
+}
 
-        let record = build_record();
-        backend.put(record.clone()).unwrap();
-        let list = backend
-            .list(record.meta.uri.scope(), Some("config"), Some("service"))
-            .unwrap();
-        assert_eq!(list.len(), 1);
-    }
+#[derive(Deserialize)]
+struct AccessSecretVersionResponse {
+    payload: Option<SecretPayload>,
+}
 
-    #[test]
-    fn kms_roundtrip() {
-        let config = GcpProviderConfig {
-            project: "proj".into(),
-            secret_prefix: "prefix".into(),
-            kms_keys: AliasMap::with_default(
-                "projects/proj/locations/global/keyRings/default/cryptoKeys/app",
-            ),
-        };
-        let provider = GcpKmsKeyProvider::new(config);
-        let scope = Scope::new("staging", "payments", None).unwrap();
-        let dek = vec![10, 20, 30, 40];
-        let wrapped = provider.wrap_dek(&scope, &dek).unwrap();
-        let unwrapped = provider.unwrap_dek(&scope, &wrapped).unwrap();
-        assert_eq!(dek, unwrapped);
-    }
+#[derive(Deserialize)]
+struct SecretPayload {
+    data: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SecretVersionsListResponse {
+    #[serde(default)]
+    versions: Option<Vec<SecretVersionEntry>>,
+    #[serde(rename = "nextPageToken")]
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SecretVersionEntry {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct SecretListResponse {
+    #[serde(default)]
+    secrets: Option<Vec<SecretListEntry>>,
+}
+
+#[derive(Deserialize)]
+struct SecretListEntry {
+    name: String,
 }
