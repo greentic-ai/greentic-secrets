@@ -10,7 +10,6 @@ documentation = "https://docs.rs/greentic-secrets-provider-k8s"
 keywords = ["secrets", "greentic", "kubernetes", "cloud", "envelope"]
 categories = ["config", "authentication", "cryptography"]
 include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
-publish = false
 
 [lib]
 name = "secrets_provider_k8s"
