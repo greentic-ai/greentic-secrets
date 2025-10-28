@@ -27,6 +27,7 @@ jobs:
         with:
           path: .
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          publish-order: greentic-secrets-spec
           # Only publish crates with unpublished versions
           ignore-unpublished-changes: false
           check-repo: true

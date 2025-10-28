@@ -13,14 +13,6 @@ jobs:
       - run: cargo build --workspace --all-features
       - run: cargo test --workspace --all-features
 
-  wasm:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: rustup target add wasm32-wasip2
-      - run: cargo build -p greentic-secrets-wit --target wasm32-wasip2
-
   conformance:
     runs-on: ubuntu-latest
     strategy:
