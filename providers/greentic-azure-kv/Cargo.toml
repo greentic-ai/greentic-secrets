@@ -19,8 +19,8 @@ name = "secrets_provider_azure_kv"
 anyhow = { workspace = true }
 async-trait = "0.1"
 base64 = "0.22.1"
-greentic-secrets-spec = { path = "../../greentic-secrets-spec", version = "0.1.2" }
-greentic-secrets-support = { path = "../../greentic-secrets-support", version = "0.1.2" }
+greentic-secrets-spec = { path = "../../greentic-secrets-spec", version = "=0.1.3" }
+greentic-secrets-support = { path = "../../greentic-secrets-support", version = "=0.1.3" }
 rsa = "0.9.7"
 serde = { workspace = true }
 serde_json = { workspace = true }

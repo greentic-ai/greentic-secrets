@@ -24,9 +24,9 @@ providers-vault = ["dep:greentic_secrets_provider_vault_kv"]
 providers-dev = ["dep:greentic_secrets_provider_dev"]
 
 [dependencies]
-greentic_secrets_spec = { package = "greentic-secrets-spec", path = "../greentic-secrets-spec", version = "0.1.2", optional = true }
-greentic_secrets_core = { package = "greentic-secrets-core", path = "../greentic-secrets-core", version = "0.1.2", optional = true }
-greentic_secrets_support = { package = "greentic-secrets-support", path = "../greentic-secrets-support", version = "0.1.2", optional = true }
+greentic_secrets_spec = { package = "greentic-secrets-spec", path = "../greentic-secrets-spec", version = "=0.1.3", optional = true }
+greentic_secrets_core = { package = "greentic-secrets-core", path = "../greentic-secrets-core", version = "=0.1.3", optional = true }
+greentic_secrets_support = { package = "greentic-secrets-support", path = "../greentic-secrets-support", version = "=0.1.3", optional = true }
 greentic_secrets_provider_aws_sm = { package = "greentic-secrets-provider-aws-sm", path = "../providers/greentic-aws-sm", version = "0.1.2", optional = true }
 greentic_secrets_provider_azure_kv = { package = "greentic-secrets-provider-azure-kv", path = "../providers/greentic-azure-kv", version = "0.1.2", optional = true }
 greentic_secrets_provider_gcp_sm = { package = "greentic-secrets-provider-gcp-sm", path = "../providers/greentic-gcp-sm", version = "0.1.2", optional = true }
