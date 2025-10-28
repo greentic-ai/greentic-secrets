@@ -38,11 +38,15 @@ fi
 # -------- STEP 1: bump versions across all crates --------
 echo "==> Bumping versions to ${NEW_VERSION} (updates inter-crate deps too)"
 # This bumps all publishable packages AND updates dependent version fields.
-cargo workspaces version \
+cargo workspaces version custom "${NEW_VERSION}" \
   --force '*' \
   --no-git-tag \
+  --no-git-commit \
+  --no-git-push \
+  --no-global-tag \
+  --no-individual-tags \
   --exact \
-  --set-version "${NEW_VERSION}"
+  --yes
 
 # -------- STEP 2: regenerate lock & build to sanity check --------
 echo "==> Building workspace"
