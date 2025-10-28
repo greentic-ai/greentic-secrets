@@ -1,0 +1,16 @@
+[package]
+name = "greentic-secrets-conformance"
+version.workspace = true
+edition = "2021"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow = "1"
+greentic-secrets-spec = { path = "../greentic-secrets-spec", version = "0.1.2" }
+greentic-secrets-support = { path = "../greentic-secrets-support", version = "0.1.2" }
+greentic_secrets_provider_dev = { package = "greentic-secrets-provider-dev", path = "../providers/greentic-dev", version = "0.1.2", optional = true }
+
+[features]
+default = []
+provider-dev = ["greentic_secrets_provider_dev"]

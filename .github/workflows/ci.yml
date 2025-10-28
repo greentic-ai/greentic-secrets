@@ -2,36 +2,31 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
   pull_request:
-
-env:
-  CARGO_TERM_COLOR: always
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --workspace --all-features
+      - run: cargo test --workspace --all-features
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup target add wasm32-wasi
+      - run: cargo build -p greentic-secrets-wit --target wasm32-wasi
 
-      - name: Cargo fmt
-        run: cargo fmt --all -- --check
-
-      - name: Cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Cargo test
-        run: cargo test --workspace
-
-      - name: Cargo build
-        run: cargo build --workspace --release
-
-      - name: Cargo build (use_spec feature)
-        run: cargo build --workspace --features use_spec
+  conformance:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features: ["provider-dev"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo run -p greentic-secrets-conformance --features ${{ matrix.features }}

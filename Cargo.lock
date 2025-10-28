@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "greentic-secrets-core",
  "greentic-secrets-provider-aws-sm",
@@ -830,14 +830,14 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-api"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "greentic-secrets-broker"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -876,8 +876,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "greentic-secrets-conformance"
+version = "0.1.3"
+dependencies = [
+ "anyhow",
+ "greentic-secrets-provider-dev",
+ "greentic-secrets-spec",
+ "greentic-secrets-support",
+ "tokio",
+]
+
+[[package]]
 name = "greentic-secrets-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -905,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-aws-sm"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -918,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-azure-kv"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -932,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-dev"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -948,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-gcp-sm"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -961,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-k8s"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -975,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-vault-kv"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -989,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-sdk"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -1006,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-spec"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "schemars",
@@ -1017,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-support"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -1029,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-wit"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "serde",
  "serde_json",

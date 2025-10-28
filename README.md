@@ -39,15 +39,30 @@ cargo run -p greentic-secrets-broker --example broker_startup
 
 ### Providers (opt-in features)
 Enable only what you deploy to:
+
 ```toml
-# example
+# Direct dependency on the core crate
 greentic-secrets-core = { version = "0.1", features = ["providers-aws"] }
 
+# Or via the umbrella crate re-exports
+greentic-secrets = { version = "0.1", features = ["providers-aws"] }
+```
+
+```rust
+// Direct core import
 use greentic_secrets_core::SecretsCore;
 use greentic_secrets_core::aws::ProviderAwsBackend;
 
 let core = SecretsCore::builder()
     .with_backend("aws", ProviderAwsBackend::default())
+    .build();
+
+// Umbrella crate re-export
+use greentic_secrets::core::SecretsCore as UmbrellaCore;
+use greentic_secrets::aws::ProviderAwsBackend as UmbrellaAwsBackend;
+
+let umbrella_core = UmbrellaCore::builder()
+    .with_backend("aws", UmbrellaAwsBackend::default())
     .build();
 ```
 
@@ -77,7 +92,9 @@ variables, invalidation semantics, and end-to-end examples (including WASM host
 export).
 
 For backend mapping rules see [`docs/backends.md`](docs/backends.md); policy
-notes live under [`docs/policy.md`](docs/policy.md).
+notes live under [`docs/policy.md`](docs/policy.md). Operator-focused guidance
+is captured in [`docs/security.md`](docs/security.md) and
+[`docs/rotation.md`](docs/rotation.md).
 
 ## Self-described secrets
 
@@ -125,5 +142,6 @@ We publish workspace crates to crates.io via GitHub Actions:
 - CI publishes only crates whose new version isn’t yet on crates.io (in dependency order) and creates a GitHub Release.
 - To validate before tagging, open a PR and check **“Check crates (package dry-run)”**.
 - To publish one crate manually (e.g., a provider), use the **“Publish one crate”** workflow from the Actions tab.
+- You can automate the bump/tag/push flow with `scripts/release.sh X.Y.Z`, which runs `cargo workspaces version`, dry-run packaging, regenerates `CHANGELOG.md`, and pushes the release tag.
 
 Make sure the repository has the `CARGO_REGISTRY_TOKEN` secret set (crates.io → Account → New token).
