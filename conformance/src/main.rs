@@ -42,12 +42,13 @@ async fn main() -> Result<()> {
 
 #[allow(dead_code, unused_imports)]
 mod tests {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use greentic_secrets_spec::{
         ContentType, EncryptionAlgorithm, Envelope, SecretMeta, SecretRecord, SecretUri,
         SecretsBackend, SecretsResult, Visibility,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::runtime::Runtime;
 
     const CATEGORY: &str = "conformance";
 
@@ -202,61 +203,97 @@ mod tests {
 
     #[cfg(feature = "provider-aws")]
     pub async fn run_aws(base: &str) -> Result<()> {
-        use greentic_secrets_provider_aws_sm::build_backend;
+        use greentic_secrets_provider_aws_sm::{build_backend, BackendComponents};
 
-        let tag = combine_tag(base, "aws");
-        let scope = convert(make_scope(&tag))?;
-        let uri = convert(make_uri(&scope, &tag))?;
-        let payload = make_payload(&tag);
-        let components = build_backend().await?;
-        run_cycle(components.backend, scope, uri, payload)
+        run_provider_async(base, "aws", || async {
+            let BackendComponents {
+                backend,
+                key_provider,
+            } = build_backend().await?;
+            drop(key_provider);
+            Ok(backend)
+        })
+        .await
     }
 
     #[cfg(feature = "provider-azure")]
     pub async fn run_azure(base: &str) -> Result<()> {
-        use greentic_secrets_provider_azure_kv::build_backend;
+        use greentic_secrets_provider_azure_kv::{build_backend, BackendComponents};
 
-        let tag = combine_tag(base, "azure");
-        let scope = convert(make_scope(&tag))?;
-        let uri = convert(make_uri(&scope, &tag))?;
-        let payload = make_payload(&tag);
-        let components = build_backend().await?;
-        run_cycle(components.backend, scope, uri, payload)
+        run_provider_async(base, "azure", || async {
+            let BackendComponents {
+                backend,
+                key_provider,
+            } = build_backend().await?;
+            drop(key_provider);
+            Ok(backend)
+        })
+        .await
     }
 
     #[cfg(feature = "provider-gcp")]
     pub async fn run_gcp(base: &str) -> Result<()> {
-        use greentic_secrets_provider_gcp_sm::build_backend;
+        use greentic_secrets_provider_gcp_sm::{build_backend, BackendComponents};
 
-        let tag = combine_tag(base, "gcp");
-        let scope = convert(make_scope(&tag))?;
-        let uri = convert(make_uri(&scope, &tag))?;
-        let payload = make_payload(&tag);
-        let components = build_backend().await?;
-        run_cycle(components.backend, scope, uri, payload)
+        run_provider_async(base, "gcp", || async {
+            let BackendComponents {
+                backend,
+                key_provider,
+            } = build_backend().await?;
+            drop(key_provider);
+            Ok(backend)
+        })
+        .await
     }
 
     #[cfg(feature = "provider-k8s")]
     pub async fn run_k8s(base: &str) -> Result<()> {
-        use greentic_secrets_provider_k8s::build_backend;
+        use greentic_secrets_provider_k8s::{build_backend, BackendComponents};
 
-        let tag = combine_tag(base, "k8s");
-        let scope = convert(make_scope(&tag))?;
-        let uri = convert(make_uri(&scope, &tag))?;
-        let payload = make_payload(&tag);
-        let components = build_backend().await?;
-        run_cycle(components.backend, scope, uri, payload)
+        run_provider_async(base, "k8s", || async {
+            let BackendComponents {
+                backend,
+                key_provider,
+            } = build_backend().await?;
+            drop(key_provider);
+            Ok(backend)
+        })
+        .await
     }
 
     #[cfg(feature = "provider-vault")]
     pub async fn run_vault(base: &str) -> Result<()> {
-        use greentic_secrets_provider_vault_kv::build_backend;
+        use greentic_secrets_provider_vault_kv::{build_backend, BackendComponents};
 
-        let tag = combine_tag(base, "vault");
+        run_provider_async(base, "vault", || async {
+            let BackendComponents {
+                backend,
+                key_provider,
+            } = build_backend().await?;
+            drop(key_provider);
+            Ok(backend)
+        })
+        .await
+    }
+
+    async fn run_provider_async<B, Fut>(base: &str, provider: &str, builder: B) -> Result<()>
+    where
+        B: Send + 'static + FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Box<dyn SecretsBackend>>> + Send + 'static,
+    {
+        let tag = combine_tag(base, provider);
         let scope = convert(make_scope(&tag))?;
         let uri = convert(make_uri(&scope, &tag))?;
         let payload = make_payload(&tag);
-        let components = build_backend().await?;
-        run_cycle(components.backend, scope, uri, payload)
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let runtime = Runtime::new().context("failed to create helper runtime")?;
+            let backend = runtime.block_on(builder())?;
+            drop(runtime);
+            run_cycle(backend, scope, uri, payload)
+        })
+        .await??;
+
+        Ok(())
     }
 }
