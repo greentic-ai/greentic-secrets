@@ -40,11 +40,7 @@ echo "==> Bumping versions to ${NEW_VERSION} (updates inter-crate deps too)"
 # This bumps all publishable packages AND updates dependent version fields.
 cargo workspaces version custom "${NEW_VERSION}" \
   --force '*' \
-  --no-git-tag \
   --no-git-commit \
-  --no-git-push \
-  --no-global-tag \
-  --no-individual-tags \
   --exact \
   --yes
 
