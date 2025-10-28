@@ -42,7 +42,7 @@ cargo workspaces version \
   --force '*' \
   --no-git-tag \
   --exact \
-  --version "${NEW_VERSION}"
+  --set-version "${NEW_VERSION}"
 
 # -------- STEP 2: regenerate lock & build to sanity check --------
 echo "==> Building workspace"
