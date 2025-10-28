@@ -1,0 +1,24 @@
+name: Check crates (package dry-run)
+
+on:
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Package all publishable crates (dry-run)
+        run: |
+          failures=0
+          for PKG in $(cargo metadata --format-version 1 | jq -r '.packages[] | select(.publish != ["false"]) | .name'); do
+            echo "::group::Packaging $PKG"
+            if ! cargo package -p "$PKG" --allow-dirty; then
+              failures=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $failures

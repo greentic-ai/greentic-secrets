@@ -1,14 +1,15 @@
 [package]
 name = "greentic-secrets-core"
 version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Embedded, pluggable, multi-cloud secrets for Greentic runtimes (no HTTP on hot path)"
-repository = "https://github.com/greentic-ai/greentic"
+edition = "2021"
+license = "MIT"
+description = "Core runtime and backend orchestration for Greentic secrets."
+repository = "https://github.com/greentic-ai/greentic-secrets"
 readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-core"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
 categories = ["config", "authentication", "cryptography"]
-keywords = ["secrets", "kubernetes", "gcp", "azure", "greentic"]
-include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "README.md", "LICENSE*"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [features]
 default = ["use_spec"]
@@ -40,9 +41,9 @@ async-nats = { version = "0.44.2", optional = true }
 futures = { version = "0.3", optional = true }
 reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls"], optional = true }
 tracing = { workspace = true }
-greentic-secrets-api = { path = "../greentic-secrets-api", version = "0.1.0" }
-greentic-secrets-spec = { path = "../greentic-secrets-spec", version = "0.1.0" }
-greentic-secrets-support = { path = "../greentic-secrets-support", version = "0.1.0" }
+greentic-secrets-api = { path = "../greentic-secrets-api", version = "0.1.2" }
+greentic-secrets-spec = { path = "../greentic-secrets-spec", version = "0.1.2" }
+greentic-secrets-support = { path = "../greentic-secrets-support", version = "0.1.2" }
 
 [dependencies.chacha20poly1305]
 version = "0.10"

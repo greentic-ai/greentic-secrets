@@ -1,8 +1,15 @@
 [package]
 name = "greentic-secrets-provider-azure-kv"
 version.workspace = true
-edition.workspace = true
-license.workspace = true
+edition = "2021"
+license = "MIT"
+description = "Azure Key Vault backend for the Greentic secrets core."
+repository = "https://github.com/greentic-ai/greentic-secrets"
+readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-provider-azure-kv"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
+categories = ["config", "authentication", "cryptography"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 publish = false
 
 [lib]
@@ -12,8 +19,8 @@ name = "secrets_provider_azure_kv"
 anyhow = { workspace = true }
 async-trait = "0.1"
 base64 = "0.22.1"
-greentic-secrets-spec = { path = "../../greentic-secrets-spec", version = "0.1.0" }
-greentic-secrets-support = { path = "../../greentic-secrets-support", version = "0.1.0" }
+greentic-secrets-spec = { path = "../../greentic-secrets-spec", version = "0.1.2" }
+greentic-secrets-support = { path = "../../greentic-secrets-support", version = "0.1.2" }
 rsa = "0.9.7"
 serde = { workspace = true }
 serde_json = { workspace = true }

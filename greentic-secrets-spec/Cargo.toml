@@ -1,10 +1,15 @@
 [package]
 name = "greentic-secrets-spec"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 license = "MIT"
 description = "Canonical traits and data models for Greentic secrets (read/write, versioning, metadata)."
 repository = "https://github.com/greentic-ai/greentic-secrets"
+readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-spec"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
+categories = ["config", "authentication", "cryptography"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [features]
 default = ["std", "serde"]

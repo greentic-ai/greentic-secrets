@@ -1,8 +1,15 @@
 [package]
 name = "greentic-secrets-wit"
 version.workspace = true
-edition.workspace = true
-license.workspace = true
+edition = "2021"
+license = "MIT"
+description = "WIT bindings for exposing Greentic secrets APIs to WebAssembly components."
+repository = "https://github.com/greentic-ai/greentic-secrets"
+readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-wit"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
+categories = ["config", "authentication", "cryptography"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 publish = false
 
 [lib]

@@ -1,10 +1,15 @@
 [package]
 name = "greentic-secrets-support"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 license = "MIT"
 description = "Helper utilities for Greentic secrets providers (constructors, crypto envelope, URI helpers)."
 repository = "https://github.com/greentic-ai/greentic-secrets"
+readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-support"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
+categories = ["config", "authentication", "cryptography"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [features]
 default = ["serde", "crypto-ring"]
@@ -13,7 +18,7 @@ crypto-ring = ["dep:ring"]
 crypto-none = []
 
 [dependencies]
-greentic-secrets-spec = { path = "../greentic-secrets-spec", version = "0.1.0" }
+greentic-secrets-spec = { path = "../greentic-secrets-spec", version = "0.1.2" }
 async-trait = "0.1"
 time = "0.3"
 serde = { version = "1", features = ["derive"], optional = true }

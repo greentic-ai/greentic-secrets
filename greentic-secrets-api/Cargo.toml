@@ -1,10 +1,15 @@
 [package]
 name = "greentic-secrets-api"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 license = "MIT"
-description = "Shared traits and types for Greentic secrets backends"
+description = "Shared traits and types for Greentic secrets backends."
 repository = "https://github.com/greentic-ai/greentic-secrets"
+readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-api"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
+categories = ["config", "authentication", "cryptography"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [features]
 default = ["std"]

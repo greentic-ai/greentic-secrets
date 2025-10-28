@@ -1,8 +1,15 @@
 [package]
 name = "greentic-secrets-sdk"
 version.workspace = true
-edition.workspace = true
-license.workspace = true
+edition = "2021"
+license = "MIT"
+description = "Async Rust SDK for interacting with the Greentic secrets broker."
+repository = "https://github.com/greentic-ai/greentic-secrets"
+readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-sdk"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
+categories = ["config", "authentication", "cryptography"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 publish = false
 
 [lib]
@@ -18,7 +25,7 @@ serde_json = { workspace = true }
 thiserror = "2.0.17"
 tokio = { workspace = true }
 tracing = { workspace = true }
-secrets-core = { package = "greentic-secrets-core", version = "=0.1.2", path = "../greentic-secrets-core" }
+secrets-core = { package = "greentic-secrets-core", version = "0.1.2", path = "../greentic-secrets-core" }
 uuid = { version = "1", features = ["v4"] }
 
 [[example]]

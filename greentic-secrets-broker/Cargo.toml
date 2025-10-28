@@ -1,8 +1,15 @@
 [package]
 name = "greentic-secrets-broker"
 version.workspace = true
-edition.workspace = true
-license.workspace = true
+edition = "2021"
+license = "MIT"
+description = "HTTP and NATS broker exposing Greentic secrets to applications."
+repository = "https://github.com/greentic-ai/greentic-secrets"
+readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-broker"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
+categories = ["config", "authentication", "cryptography"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 publish = false
 
 [lib]
@@ -31,14 +38,14 @@ tower = "0.5.2"
 tower-http = { version = "0.6.6", features = ["trace"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-secrets-core = { package = "greentic-secrets-core", version = "=0.1.2", path = "../greentic-secrets-core" }
-secrets-provider-dev = { package = "greentic-secrets-provider-dev", path = "../providers/greentic-dev" }
-secrets-provider-aws-sm = { package = "greentic-secrets-provider-aws-sm", path = "../providers/greentic-aws-sm", optional = true }
-secrets-provider-gcp-sm = { package = "greentic-secrets-provider-gcp-sm", path = "../providers/greentic-gcp-sm", optional = true }
-secrets-provider-azure-kv = { package = "greentic-secrets-provider-azure-kv", path = "../providers/greentic-azure-kv", optional = true }
-secrets-provider-k8s = { package = "greentic-secrets-provider-k8s", path = "../providers/greentic-k8s", optional = true }
-secrets-provider-vault-kv = { package = "greentic-secrets-provider-vault-kv", path = "../providers/greentic-vault-kv", optional = true }
-secrets-wit = { package = "greentic-secrets-wit", path = "../greentic-secrets-wit" }
+secrets-core = { package = "greentic-secrets-core", version = "0.1.2", path = "../greentic-secrets-core" }
+secrets-provider-dev = { package = "greentic-secrets-provider-dev", path = "../providers/greentic-dev", version = "0.1.2" }
+secrets-provider-aws-sm = { package = "greentic-secrets-provider-aws-sm", path = "../providers/greentic-aws-sm", version = "0.1.2", optional = true }
+secrets-provider-gcp-sm = { package = "greentic-secrets-provider-gcp-sm", path = "../providers/greentic-gcp-sm", version = "0.1.2", optional = true }
+secrets-provider-azure-kv = { package = "greentic-secrets-provider-azure-kv", path = "../providers/greentic-azure-kv", version = "0.1.2", optional = true }
+secrets-provider-k8s = { package = "greentic-secrets-provider-k8s", path = "../providers/greentic-k8s", version = "0.1.2", optional = true }
+secrets-provider-vault-kv = { package = "greentic-secrets-provider-vault-kv", path = "../providers/greentic-vault-kv", version = "0.1.2", optional = true }
+secrets-wit = { package = "greentic-secrets-wit", path = "../greentic-secrets-wit", version = "0.1.2" }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]

@@ -116,7 +116,14 @@ if !validation.missing.is_empty() {
 The broker remains available for HTTP and NATS workflows. Build it with the
 backend features you need and run it alongside your existing infrastructure.
 
-### Releasing
-- Bump versions via conventional commits or `cargo set-version`.
-- Tag the repo: `git tag v0.1.2 && git push --tags`
-- CI publishes changed crates in correct order and creates a GitHub Release.
+## Releasing
+
+We publish workspace crates to crates.io via GitHub Actions:
+
+- **Bump versions** in each `Cargo.toml` you want to release (or use your preferred versioning tool).
+- **Tag the repo**: `git tag v0.1.3 && git push --tags`.
+- CI publishes only crates whose new version isn’t yet on crates.io (in dependency order) and creates a GitHub Release.
+- To validate before tagging, open a PR and check **“Check crates (package dry-run)”**.
+- To publish one crate manually (e.g., a provider), use the **“Publish one crate”** workflow from the Actions tab.
+
+Make sure the repository has the `CARGO_REGISTRY_TOKEN` secret set (crates.io → Account → New token).

@@ -1,8 +1,15 @@
 [package]
 name = "greentic-secrets-provider-dev"
 version.workspace = true
-edition.workspace = true
-license.workspace = true
+edition = "2021"
+license = "MIT"
+description = "Local development backend for the Greentic secrets core."
+repository = "https://github.com/greentic-ai/greentic-secrets"
+readme = "README.md"
+documentation = "https://docs.rs/greentic-secrets-provider-dev"
+keywords = ["secrets", "greentic", "kubernetes", "cloud", "multi-tenant"]
+categories = ["config", "authentication", "cryptography"]
+include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 publish = false
 
 [lib]
@@ -13,8 +20,8 @@ base64 = "0.22.1"
 fs2 = "0.4"
 parking_lot = "0.12"
 async-trait = "0.1"
-greentic-secrets-spec = { path = "../../greentic-secrets-spec", version = "0.1.0" }
-greentic-secrets-support = { path = "../../greentic-secrets-support", version = "0.1.0" }
+greentic-secrets-spec = { path = "../../greentic-secrets-spec", version = "0.1.2" }
+greentic-secrets-support = { path = "../../greentic-secrets-support", version = "0.1.2" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"
