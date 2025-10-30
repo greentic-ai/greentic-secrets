@@ -137,6 +137,38 @@ if !validation.missing.is_empty() {
 }
 ```
 
+## Runner policy & environment bindings
+
+The workspace ships with `greentic-secrets-runner`, a small host bridge that
+exposes `secrets.get` backed by the local environment. Access is denied unless
+the tenant appears in a JSON allowlist, giving operators a deny-by-default
+posture.
+
+```json
+{
+  "tenants": {
+    "acme": { "allow_env": ["TELEGRAM_BOT_TOKEN"] }
+  },
+  "global": { "allow_env": ["SENTRY_DSN"] }
+}
+```
+
+```rust
+use greentic_secrets_runner::{Bindings, TenantBinding, TenantCtx, secrets_get};
+
+let bindings = Bindings::default()
+    .with_tenant("acme", TenantBinding::new(["TELEGRAM_BOT_TOKEN"]));
+let ctx = TenantCtx::new("prod", "acme");
+
+let token = secrets_get(&bindings, "TELEGRAM_BOT_TOKEN", Some(&ctx))?;
+assert_eq!(token, "actual-secret");
+```
+
+Secrets missing from the allowlist surface a stable `denied` error code. This
+policy layer also prepares the runner to front future cloud backends—swap out
+the environment provider for Vault, AWS, or GCP while reusing the same
+allowlist configuration.
+
 ## Broker
 
 The broker remains available for HTTP and NATS workflows. Build it with the

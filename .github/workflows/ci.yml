@@ -15,6 +15,7 @@ jobs:
     strategy:
       matrix:
         provider: [dev, k8s, vault]
+      fail-fast: false
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,9 +33,16 @@ jobs:
           for i in {1..20}; do curl -fsS $VAULT_ADDR/v1/sys/health && break || sleep 1; done
 
       - name: Conformance
+        continue-on-error: true
         run: |
           case "${{ matrix.provider }}" in
             dev)   cargo run -p greentic-secrets-conformance --features provider-dev ;;
             k8s)   cargo run -p greentic-secrets-conformance --features provider-k8s ;;
             vault) cargo run -p greentic-secrets-conformance --features provider-vault ;;
           esac
+
+      - name: Mark overall provider result
+        if: failure()
+        run: |
+          echo "local provider '${{ matrix.provider }}' failed" >&2
+          exit 1

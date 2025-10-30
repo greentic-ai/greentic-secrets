@@ -6,6 +6,7 @@ members = [
     "greentic-secrets-broker",
     "greentic-secrets",
     "conformance",
+    "crates/greentic-secrets-runner",
     "providers/greentic-dev",
     "providers/greentic-aws-sm",
     "providers/greentic-gcp-sm",
@@ -18,7 +19,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.1.6"
+version = "0.1.7"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
