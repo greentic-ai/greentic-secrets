@@ -8,7 +8,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace --all-features
-      - run: cargo test --workspace --all-features
+      - run: RUST_BACKTRACE=1 cargo test --workspace --all-features -- --nocapture
 
   local-providers:
     runs-on: ubuntu-latest
@@ -36,9 +36,9 @@ jobs:
         continue-on-error: true
         run: |
           case "${{ matrix.provider }}" in
-            dev)   cargo run -p greentic-secrets-conformance --features provider-dev ;;
-            k8s)   cargo run -p greentic-secrets-conformance --features provider-k8s ;;
-            vault) cargo run -p greentic-secrets-conformance --features provider-vault ;;
+            dev)   RUST_BACKTRACE=1 cargo run -p greentic-secrets-conformance --features provider-dev ;;
+            k8s)   RUST_BACKTRACE=1 cargo run -p greentic-secrets-conformance --features provider-k8s ;;
+            vault) RUST_BACKTRACE=1 cargo run -p greentic-secrets-conformance --features provider-vault ;;
           esac
 
       - name: Mark overall provider result

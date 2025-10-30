@@ -2,9 +2,7 @@ use greentic_secrets_runner::{Bindings, Policy, TenantBinding, TenantCtx};
 
 #[test]
 fn tenant_policy_allows_team_scope() {
-    let bindings = Bindings::default().with_tenant("acme", TenantBinding::new([
-        "ALLOWED_KEY",
-    ]));
+    let bindings = Bindings::default().with_tenant("acme", TenantBinding::new(["ALLOWED_KEY"]));
 
     let ctx = TenantCtx::new("prod", "acme").with_team(Some("payments"));
     let policy = Policy::from_bindings(&bindings);
@@ -15,9 +13,7 @@ fn tenant_policy_allows_team_scope() {
 
 #[test]
 fn tenant_policy_allows_user_scope() {
-    let bindings = Bindings::default().with_tenant("acme", TenantBinding::new([
-        "TOKEN",
-    ]));
+    let bindings = Bindings::default().with_tenant("acme", TenantBinding::new(["TOKEN"]));
 
     let ctx = TenantCtx::new("prod", "acme")
         .with_team(Some("support"))
