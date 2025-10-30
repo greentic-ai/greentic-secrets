@@ -287,8 +287,17 @@ mod tests {
 
         let backend = builder().await?;
 
-        tokio::task::spawn_blocking(move || run_cycle(backend, scope, uri, payload))
-            .await??;
+        std::thread::spawn(move || run_cycle(backend, scope, uri, payload))
+            .join()
+            .map_err(|panic| {
+                if let Some(msg) = panic.downcast_ref::<&str>() {
+                    anyhow::anyhow!("provider thread panicked: {msg}")
+                } else if let Some(msg) = panic.downcast_ref::<String>() {
+                    anyhow::anyhow!("provider thread panicked: {msg}")
+                } else {
+                    anyhow::anyhow!("provider thread panicked")
+                }
+            })??;
 
         Ok(())
     }
