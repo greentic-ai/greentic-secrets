@@ -42,13 +42,12 @@ async fn main() -> Result<()> {
 
 #[allow(dead_code, unused_imports)]
 mod tests {
-    use anyhow::{Context, Result};
+    use anyhow::Result;
     use greentic_secrets_spec::{
         ContentType, EncryptionAlgorithm, Envelope, SecretMeta, SecretRecord, SecretUri,
         SecretsBackend, SecretsResult, Visibility,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::runtime::Runtime;
 
     const CATEGORY: &str = "conformance";
 
@@ -286,13 +285,10 @@ mod tests {
         let uri = convert(make_uri(&scope, &tag))?;
         let payload = make_payload(&tag);
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let runtime = Runtime::new().context("failed to create helper runtime")?;
-            let backend = runtime.block_on(builder())?;
-            drop(runtime);
-            run_cycle(backend, scope, uri, payload)
-        })
-        .await??;
+        let backend = builder().await?;
+
+        tokio::task::spawn_blocking(move || run_cycle(backend, scope, uri, payload))
+            .await??;
 
         Ok(())
     }
