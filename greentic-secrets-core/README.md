@@ -23,10 +23,10 @@ opt into additional integrations through feature flags:
 | --- | --- | --- |
 | `env` (default) | Pull secrets from process environment variables | No async runtime required |
 | `file` (default) | Read secrets from disk snapshots | Useful for local development |
-| `aws` | AWS Secrets Manager client stubs | Enable together with a concrete provider implementation |
-| `gcp` | Google Secret Manager client stubs | Requires async runtime |
-| `azure` | Azure Key Vault secrets client stubs | Requires async runtime |
-| `k8s` | Kubernetes secrets client stubs | Depends on the bundled kube/k8s-openapi stubs |
+| `aws` | AWS Secrets Manager integration | Pair with `greentic-secrets-provider-aws-sm` |
+| `gcp` | Google Secret Manager integration | Pair with `greentic-secrets-provider-gcp-sm` |
+| `azure` | Azure Key Vault integration | Pair with `greentic-secrets-provider-azure-kv` |
+| `k8s` | Kubernetes Secrets integration | Pair with `greentic-secrets-provider-k8s` |
 | `nats` | Emit invalidation events over NATS | Pulls in `tokio` and `async-nats` |
 | `imds` | Access cloud metadata services | Activates `reqwest` (Rustls TLS only) |
 | `schema` | Generate JSON schema for `SecretSpec` | Enables `schemars` |

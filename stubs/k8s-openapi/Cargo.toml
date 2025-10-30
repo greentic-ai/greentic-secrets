@@ -1,8 +1,0 @@
-[package]
-name = "k8s-openapi"
-version = "0.0.0"
-edition = "2021"
-publish = false
-
-[lib]
-path = "lib.rs"
