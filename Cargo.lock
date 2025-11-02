@@ -1263,7 +1263,7 @@ checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
 
 [[package]]
 name = "greentic-secrets"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "greentic-secrets-core",
  "greentic-secrets-provider-aws-sm",
@@ -1277,14 +1277,14 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-api"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "greentic-secrets-broker"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1323,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-conformance"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "greentic-secrets-provider-aws-sm",
@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-aws-sm"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -1382,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-azure-kv"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-dev"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-gcp-sm"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1423,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-k8s"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-vault-kv"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1449,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-runner"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-spec"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "async-trait",
  "schemars",

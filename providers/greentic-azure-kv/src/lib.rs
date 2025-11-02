@@ -497,7 +497,7 @@ impl SecretsBackend for AzureSecretsBackend {
     fn exists(&self, uri: &SecretUri) -> SecretsResult<bool> {
         Ok(self
             .get_latest(&self.secret_name(uri))?
-            .map_or(false, |entry| !entry.deleted))
+            .is_some_and(|entry| !entry.deleted))
     }
 }
 
