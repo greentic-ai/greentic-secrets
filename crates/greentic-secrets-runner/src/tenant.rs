@@ -47,7 +47,7 @@ impl TenantCtx {
         self.user.as_deref()
     }
 
-    pub fn kind(&self) -> ScopeKind {
+    pub fn kind(&self) -> ScopeKind<'_> {
         match (self.team.as_deref(), self.user.as_deref()) {
             (Some(team), Some(user)) => ScopeKind::User {
                 env: &self.env,
