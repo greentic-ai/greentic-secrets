@@ -146,15 +146,11 @@ pub enum ContentType {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[derive(Default)]
 pub enum EncryptionAlgorithm {
+    #[default]
     Aes256Gcm,
     XChaCha20Poly1305,
-}
-
-impl Default for EncryptionAlgorithm {
-    fn default() -> Self {
-        Self::Aes256Gcm
-    }
 }
 
 impl EncryptionAlgorithm {
