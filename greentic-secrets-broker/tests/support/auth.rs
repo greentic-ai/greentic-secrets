@@ -1,3 +1,4 @@
+use std::slice;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -99,8 +100,8 @@ impl TestAuth {
             .expect("ring verification");
 
         let mut validation = Validation::new(Algorithm::EdDSA);
-        validation.set_issuer(&[self.issuer.clone()]);
-        validation.set_audience(&[self.audience.clone()]);
+        validation.set_issuer(slice::from_ref(&self.issuer));
+        validation.set_audience(slice::from_ref(&self.audience));
         let public_der = public_spki(&self.public_key);
         let public_pem = encode_pem("PUBLIC KEY", &public_der);
         decode::<Value>(
