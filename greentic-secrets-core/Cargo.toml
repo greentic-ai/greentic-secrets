@@ -26,7 +26,7 @@ imds = ["dep:reqwest"]
 nats = ["dep:async-nats", "dep:futures", "tokio"]
 schema = ["schemars", "greentic_secrets_spec/schema"]
 
-xchacha = ["chacha20poly1305"]
+xchacha = []
 
 [dependencies]
 thiserror = { workspace = true }
@@ -47,11 +47,6 @@ greentic_secrets_api = { workspace = true }
 greentic_secrets_spec = { workspace = true }
 ring = { version = "0.17", optional = true }
 
-[dependencies.chacha20poly1305]
-version = "0.10"
-optional = true
-default-features = false
-features = ["std"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }

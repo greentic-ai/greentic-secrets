@@ -133,7 +133,6 @@ mod tests {
         };
         let _ = backend
             .put(with_ttl(record, 120))
-            .err()
-            .expect("backend placeholder");
+            .expect_err("backend placeholder");
     }
 }

@@ -174,6 +174,10 @@ allowlist configuration.
 The broker remains available for HTTP and NATS workflows. Build it with the
 backend features you need and run it alongside your existing infrastructure.
 
+## Releases & Publishing
+
+Versions are sourced directly from each crate’s `Cargo.toml`. Every push to `master` checks for version bumps: if a crate changed, the workflow tags the commit as `<crate-name>-v<version>` and pushes the tag. The publish job then runs `cargo fmt`, `cargo clippy`, a full workspace build, and `cargo test` before invoking `katyo/publish-crates@v2`, which publishes only crates with new versions. Re-running on the same commit is safe: existing tags are skipped and already published versions short-circuit cleanly.
+
 ## Releasing
 
 We publish workspace crates to crates.io via GitHub Actions:

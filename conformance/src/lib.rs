@@ -142,6 +142,7 @@ mod suite {
         }
     }
 
+    #[allow(dead_code)]
     fn run_cycle(
         backend: Box<dyn SecretsBackend>,
         scope: greentic_secrets_spec::Scope,
@@ -274,6 +275,7 @@ mod suite {
         .await
     }
 
+    #[allow(dead_code)]
     async fn run_provider_async<B, Fut>(base: &str, provider: &str, builder: B) -> Result<()>
     where
         B: Send + 'static + FnOnce() -> Fut,

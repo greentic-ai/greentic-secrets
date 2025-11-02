@@ -87,7 +87,7 @@ fn cache_hit_avoids_backend() {
     let backend = CountingBackend::new();
     let core = build_core_with_backend(backend.clone(), Duration::from_secs(300));
 
-    let uri = "secrets://dev/example/_/configs/cache-hit";
+    let uri = "secrets://dev/example-tenant/_/configs/cache-hit";
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {
@@ -105,7 +105,7 @@ fn cache_expiry_triggers_backend() {
     let backend = CountingBackend::new();
     let core = build_core_with_backend(backend.clone(), Duration::from_millis(50));
 
-    let uri = "secrets://dev/example/_/configs/cache-ttl";
+    let uri = "secrets://dev/example-tenant/_/configs/cache-ttl";
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {

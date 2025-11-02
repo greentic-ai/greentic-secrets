@@ -444,10 +444,7 @@ impl SecretsBackend for GcpSecretsBackend {
                 if segments.len() < 4 {
                     continue;
                 }
-                let secret_id = segments
-                    .last()
-                    .copied()
-                    .unwrap_or_else(|| entry.name.as_str());
+                let secret_id = segments.last().copied().unwrap_or(entry.name.as_str());
                 if let Some(stored) = self.fetch_latest(secret_id)? {
                     if stored.deleted {
                         continue;

@@ -389,6 +389,7 @@ impl SecretsCore {
     /// Retrieve secret bytes for the provided URI.
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>, SecretsError> {
         let uri = self.parse_uri(uri)?;
+        self.ensure_scope_allowed(uri.scope())?;
         if let Some(bytes) = self.cached_value(&uri) {
             return Ok(bytes);
         }
@@ -419,6 +420,7 @@ impl SecretsCore {
         value: &T,
     ) -> Result<SecretMeta, SecretsError> {
         let uri = self.parse_uri(uri)?;
+        self.ensure_scope_allowed(uri.scope())?;
         let bytes = serde_json::to_vec(value)?;
         let mut meta = SecretMeta::new(uri.clone(), Visibility::Team, ContentType::Json);
         meta.description = None;
@@ -443,6 +445,7 @@ impl SecretsCore {
     /// Delete a secret.
     pub async fn delete(&self, uri: &str) -> Result<(), SecretsError> {
         let uri = self.parse_uri(uri)?;
+        self.ensure_scope_allowed(uri.scope())?;
         {
             let broker = self.broker.lock().unwrap();
             broker.delete_secret(&uri)?;
@@ -455,6 +458,7 @@ impl SecretsCore {
     /// List secret metadata matching the provided prefix.
     pub async fn list(&self, prefix: &str) -> Result<Vec<SecretMeta>, SecretsError> {
         let (scope, category_prefix, name_prefix) = parse_prefix(prefix)?;
+        self.ensure_scope_allowed(&scope)?;
         let items: Vec<SecretListItem> = {
             let broker = self.broker.lock().unwrap();
             broker.list_secrets(&scope, category_prefix.as_deref(), name_prefix.as_deref())?
@@ -500,6 +504,28 @@ impl SecretsCore {
             expires_at: Instant::now() + self.cache_ttl,
         };
         cache.put(key, entry);
+    }
+
+    fn ensure_scope_allowed(&self, scope: &Scope) -> Result<(), SecretsError> {
+        if scope.tenant() != self.config.tenant {
+            return Err(SecretsError::Builder(format!(
+                "tenant `{}` is not permitted for this runtime (allowed tenant: `{}`)",
+                scope.tenant(),
+                self.config.tenant
+            )));
+        }
+
+        if let Some(expected_team) = self.config.team.as_ref() {
+            match scope.team() {
+                Some(team) if team == expected_team => Ok(()),
+                Some(team) => Err(SecretsError::Builder(format!(
+                    "team `{team}` is not permitted for this runtime (allowed team: `{expected_team}`)"
+                ))),
+                None => Ok(()),
+            }
+        } else {
+            Ok(())
+        }
     }
 
     /// Remove cached entries whose keys match the provided exact URIs or prefixes
@@ -866,6 +892,7 @@ mod tests {
     fn roundtrip_put_get_json() {
         rt().block_on(async {
             let core = SecretsCore::builder()
+                .tenant("acme")
                 .backend(MemoryBackend::new(), MemoryKeyProvider::default())
                 .build()
                 .await
@@ -886,6 +913,7 @@ mod tests {
         rt().block_on(async {
             let ttl = Duration::from_millis(50);
             let core = SecretsCore::builder()
+                .tenant("acme")
                 .default_ttl(ttl)
                 .backend(MemoryBackend::new(), MemoryKeyProvider::default())
                 .build()
@@ -927,6 +955,7 @@ mod tests {
     fn cache_invalidation_patterns() {
         rt().block_on(async {
             let core = SecretsCore::builder()
+                .tenant("acme")
                 .backend(MemoryBackend::new(), MemoryKeyProvider::default())
                 .build()
                 .await
