@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use aws_config::BehaviorVersion;
-use aws_sdk_kms::{primitives::Blob as KmsBlob, Client as KmsClient};
+use aws_sdk_kms::{Client as KmsClient, primitives::Blob as KmsBlob};
+use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_secretsmanager::error::SdkError;
 use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType};
-use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_types::region::Region;
 use greentic_secrets_spec::{
     KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
@@ -96,7 +96,12 @@ impl AwsProviderConfig {
     }
 
     fn scope_prefix(&self, scope: &Scope) -> String {
-        format!("{}/{}/{}/", self.secret_prefix, scope.env(), scope.tenant())
+        format!(
+            "{prefix}/{env}/{tenant}/",
+            prefix = self.secret_prefix,
+            env = scope.env(),
+            tenant = scope.tenant()
+        )
     }
 }
 

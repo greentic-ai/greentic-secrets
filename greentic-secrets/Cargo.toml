@@ -1,7 +1,7 @@
 [package]
 name = "greentic-secrets"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license = "MIT"
 description = "Umbrella crate re-exporting Greentic secrets spec, core runtime, and optional providers."
 repository = "https://github.com/greentic-ai/greentic-secrets"

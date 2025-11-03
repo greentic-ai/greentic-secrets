@@ -29,7 +29,7 @@ pub mod value {
                 0..=4 => "****".into(),
                 _ => {
                     let prefix = cmp::min(4, n);
-                    format!("{}****", &self.0[..prefix])
+                    format!("{prefix_head}****", prefix_head = &self.0[..prefix])
                 }
             }
         }
@@ -55,8 +55,8 @@ pub mod error {
 
 pub mod spec {
     use super::{
-        error::{Result, SecretsError},
         String, Vec,
+        error::{Result, SecretsError},
     };
 
     pub struct SecretSpec {

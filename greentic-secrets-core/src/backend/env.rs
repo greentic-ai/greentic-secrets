@@ -121,7 +121,9 @@ mod tests {
         let uri = SecretUri::new(scope, "configs", "service").unwrap();
         let record = sample_record(uri.clone());
         let var = EnvBackend::var_name(&uri);
-        std::env::set_var(&var, serde_json::to_string(&record).unwrap());
+        unsafe {
+            std::env::set_var(&var, serde_json::to_string(&record).unwrap());
+        }
 
         let fetched = backend.get(&uri, None).unwrap().unwrap();
         assert_eq!(fetched.record.unwrap().meta.uri, record.meta.uri);

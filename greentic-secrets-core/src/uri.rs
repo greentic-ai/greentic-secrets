@@ -4,7 +4,7 @@ pub use greentic_secrets_spec::SecretUri;
 #[cfg(not(feature = "use_spec"))]
 mod legacy {
     use crate::errors::{Error, Result};
-    use crate::types::{validate_component, validate_version, Scope};
+    use crate::types::{Scope, validate_component, validate_version};
     use serde::{Deserialize, Serialize};
     use std::fmt;
     use std::str::FromStr;

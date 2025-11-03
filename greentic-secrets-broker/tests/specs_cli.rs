@@ -1,11 +1,10 @@
 use anyhow::Result;
-use assert_cmd::Command;
 use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
 fn specs_print_json_lists_known_secrets() -> Result<()> {
-    let mut cmd = Command::cargo_bin("secrets")?;
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("secrets");
     cmd.args(["specs", "print", "--format", "json"]);
     let output = cmd.output()?;
 
@@ -27,7 +26,7 @@ fn specs_check_reports_missing_components() -> Result<()> {
     let dir = tempdir()?;
     let persist_path = dir.path().join("dev.env");
 
-    let mut cmd = Command::cargo_bin("secrets")?;
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("secrets");
     cmd.env("GREENTIC_DEV_SECRETS_PATH", &persist_path)
         .env("GREENTIC_DEV_MASTER_KEY", "cli-test-key")
         .args([
@@ -53,7 +52,7 @@ fn specs_check_reports_missing_components() -> Result<()> {
 
 #[test]
 fn specs_schema_outputs_sorted_properties() -> Result<()> {
-    let mut cmd = Command::cargo_bin("secrets")?;
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("secrets");
     cmd.args(["specs", "schema"]);
     let output = cmd.output()?;
 

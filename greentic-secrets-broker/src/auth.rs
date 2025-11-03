@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{header::AUTHORIZATION, Request};
+use axum::http::{Request, header::AUTHORIZATION};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use tokio::sync::RwLock;
@@ -185,12 +185,12 @@ impl Authorizer {
             (Some(_), Some(_)) => {
                 return Err(anyhow!(
                     "only one of AUTH_JWT_JWKS_URL or AUTH_JWT_ED25519_PUB may be set"
-                ))
+                ));
             }
             (None, None) => {
                 return Err(anyhow!(
                     "AUTH_JWT_JWKS_URL or AUTH_JWT_ED25519_PUB must be configured"
-                ))
+                ));
             }
         };
 
@@ -258,7 +258,11 @@ impl Authorizer {
         }
 
         let key_bytes = self.lookup_public_key(&header).await?;
-        let signing_input = format!("{}.{}", segments[0], segments[1]);
+        let signing_input = format!(
+            "{header}.{payload}",
+            header = segments[0],
+            payload = segments[1]
+        );
         let signature = URL_SAFE_NO_PAD
             .decode(segments[2].as_bytes())
             .map_err(|_| AppError::unauthorized("invalid token signature"))?;

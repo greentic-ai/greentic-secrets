@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use secrets_core::backend::SecretsBackend;
 use secrets_core::key_provider::KeyProvider;
 

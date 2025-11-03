@@ -324,7 +324,7 @@ fn configure_k8s(builder: CoreBuilder, config: &ResolverConfig) -> (CoreBuilder,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[tokio::test]
     async fn defaults_to_local_provider() {

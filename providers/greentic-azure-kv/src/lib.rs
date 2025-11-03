@@ -6,7 +6,7 @@
 //! credentials flow with values supplied through environment variables.
 
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use greentic_secrets_spec::{
     KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
     SecretsError, SecretsResult, VersionedSecret,
@@ -14,7 +14,7 @@ use greentic_secrets_spec::{
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -114,11 +114,11 @@ impl AzureProviderConfig {
     }
 
     fn secrets_endpoint(&self) -> String {
-        format!("{}/secrets", self.vault_uri)
+        format!("{uri}/secrets", uri = self.vault_uri)
     }
 
     fn keys_endpoint(&self) -> String {
-        format!("{}/keys", self.vault_uri)
+        format!("{uri}/keys", uri = self.vault_uri)
     }
 }
 
@@ -150,16 +150,17 @@ impl AzureSecretsBackend {
         };
 
         let base = format!(
-            "{}-{}-{}-{}-{}-{}",
-            sanitize(&self.config.secret_prefix),
-            sanitize(uri.scope().env()),
-            sanitize(uri.scope().tenant()),
-            uri.scope()
+            "{prefix}-{env}-{tenant}-{team}-{category}-{name}",
+            prefix = sanitize(&self.config.secret_prefix),
+            env = sanitize(uri.scope().env()),
+            tenant = sanitize(uri.scope().tenant()),
+            team = uri
+                .scope()
                 .team()
                 .map(sanitize)
                 .unwrap_or_else(|| TEAM_PLACEHOLDER.to_string()),
-            sanitize(uri.category()),
-            sanitize(uri.name()),
+            category = sanitize(uri.category()),
+            name = sanitize(uri.name()),
         );
 
         if base.len() <= 110 {
@@ -527,7 +528,7 @@ impl AzureAuth {
         let mut guard = self.cache.lock().unwrap();
         if let Some(cache) = guard.as_ref() {
             if Instant::now() < cache.expires_at {
-                return Ok(format!("Bearer {}", cache.token));
+                return Ok(format!("Bearer {token}", token = cache.token));
             }
         }
 
@@ -566,7 +567,7 @@ impl AzureAuth {
             token: parsed.access_token,
             expires_at: Instant::now() + Duration::from_secs(expires_in.saturating_sub(60)),
         };
-        let token_string = format!("Bearer {}", cache_entry.token);
+        let token_string = format!("Bearer {token}", token = cache_entry.token);
         *guard = Some(cache_entry);
         Ok(token_string)
     }

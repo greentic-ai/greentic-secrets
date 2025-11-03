@@ -27,9 +27,9 @@ impl K8sBackend {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn namespace_for(uri: &SecretUri) -> String {
         let mut ns = format!(
-            "gtsec-{}-{}",
-            sanitize(uri.scope().env()),
-            sanitize(uri.scope().tenant())
+            "gtsec-{env}-{tenant}",
+            env = sanitize(uri.scope().env()),
+            tenant = sanitize(uri.scope().tenant())
         );
         if let Some(team) = uri.scope().team() {
             ns.push('-');
@@ -40,7 +40,11 @@ impl K8sBackend {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn secret_name_for(uri: &SecretUri) -> String {
-        format!("{}-{}", sanitize(uri.category()), sanitize(uri.name()))
+        format!(
+            "{category}-{name}",
+            category = sanitize(uri.category()),
+            name = sanitize(uri.name())
+        )
     }
 }
 

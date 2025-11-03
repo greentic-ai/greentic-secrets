@@ -1,4 +1,4 @@
-use greentic_secrets_runner::{secrets_get, Bindings, TenantBinding, TenantCtx};
+use greentic_secrets_runner::{Bindings, TenantBinding, TenantCtx, secrets_get};
 
 #[test]
 fn env_secret_denied_when_missing_from_allowlist() {

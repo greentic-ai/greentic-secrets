@@ -1,9 +1,9 @@
 use std::slice;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::Serialize;
@@ -27,12 +27,15 @@ impl TestAuth {
 
         let public_raw = keypair.public_key().as_ref().to_vec();
         let public_b64 = URL_SAFE_NO_PAD.encode(&public_raw);
-        std::env::set_var("AUTH_JWT_ISS", &issuer);
-        std::env::set_var("AUTH_JWT_AUD", &audience);
-        std::env::set_var("AUTH_JWT_ED25519_PUB", public_b64);
-        std::env::remove_var("AUTH_JWT_JWKS_URL");
-        std::env::remove_var("AUTH_JWT_INTERNAL_SUBJECTS");
-        std::env::remove_var("AUTH_JWT_INTERNAL_TOKEN");
+        // SAFETY: integration tests own the process environment and clean up before exit.
+        unsafe {
+            std::env::set_var("AUTH_JWT_ISS", &issuer);
+            std::env::set_var("AUTH_JWT_AUD", &audience);
+            std::env::set_var("AUTH_JWT_ED25519_PUB", public_b64);
+            std::env::remove_var("AUTH_JWT_JWKS_URL");
+            std::env::remove_var("AUTH_JWT_INTERNAL_SUBJECTS");
+            std::env::remove_var("AUTH_JWT_INTERNAL_TOKEN");
+        }
 
         let encoding_pem = encode_pem("PRIVATE KEY", pkcs8.as_ref());
         let encoding = EncodingKey::from_ed_pem(encoding_pem.as_bytes()).expect("encoding key");

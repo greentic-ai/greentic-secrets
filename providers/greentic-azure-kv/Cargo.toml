@@ -1,7 +1,7 @@
 [package]
 name = "greentic-secrets-provider-azure-kv"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license = "MIT"
 description = "Azure Key Vault backend for the Greentic secrets core."
 repository = "https://github.com/greentic-ai/greentic-secrets"
@@ -16,10 +16,10 @@ name = "secrets_provider_azure_kv"
 
 [dependencies]
 anyhow = { workspace = true }
-base64 = "0.22.1"
+base64 = { workspace = true }
 greentic_secrets_spec = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls", "blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"
-hex = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }

@@ -1,5 +1,5 @@
-use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
 use fs2::FileExt;
 use greentic_secrets_spec::{
     KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
@@ -375,7 +375,7 @@ impl SecretsBackend for DevBackend {
             None => {
                 return Err(Error::NotFound {
                     entity: uri.to_string(),
-                })
+                });
             }
         };
 

@@ -14,8 +14,10 @@ async fn main() -> anyhow::Result<()> {
         HttpClient::new(&base_url)?
     };
 
-    let tenant = std::env::var("SECRETS_EXAMPLE_TENANT")
-        .unwrap_or_else(|_| format!("examples-{}", Uuid::new_v4().simple()));
+    let tenant = std::env::var("SECRETS_EXAMPLE_TENANT").unwrap_or_else(|_| {
+        let id = Uuid::new_v4().simple();
+        format!("examples-{id}")
+    });
     let scope = Scope::new("dev".to_string(), tenant, None)?;
 
     let category = "configs";

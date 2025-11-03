@@ -29,10 +29,10 @@ use std::sync::Arc;
 pub type DynSecretsBackend = Arc<dyn SecretsBackend + Send + Sync>;
 
 pub mod prelude {
-    pub use crate::uri::*;
     pub use crate::ResultExt;
+    pub use crate::uri::*;
     pub use crate::{
-        record_from_plain, with_ttl, Envelope, KeyProvider, SecretIdentifier, SecretListItem,
-        SecretMeta, SecretRecord, SecretsBackend, SecretsError, SecretsResult,
+        Envelope, KeyProvider, SecretIdentifier, SecretListItem, SecretMeta, SecretRecord,
+        SecretsBackend, SecretsError, SecretsResult, record_from_plain, with_ttl,
     };
 }

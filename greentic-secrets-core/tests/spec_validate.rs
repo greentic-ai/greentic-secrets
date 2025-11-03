@@ -21,7 +21,10 @@ impl SecretDescribable for Demo {
 }
 
 async fn build_core() -> SecretsCore {
-    std::env::set_var("GREENTIC_SECRETS_DEV", "1");
+    // SAFETY: unit tests set the dev override for the duration of the test process.
+    unsafe {
+        std::env::set_var("GREENTIC_SECRETS_DEV", "1");
+    }
     SecretsCore::builder()
         .tenant("example-tenant")
         .default_ttl(Duration::from_secs(10))

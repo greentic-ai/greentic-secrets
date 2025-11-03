@@ -2,12 +2,12 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::IntoResponse;
-use axum::{routing::get, routing::post, Extension, Json, Router};
+use axum::{Extension, Json, Router, routing::get, routing::post};
 use serde::Deserialize;
 use tracing::Instrument;
 
 use crate::auth::{self, Action, AuthContext};
-use crate::error::{attach_correlation, AppError, AppErrorKind};
+use crate::error::{AppError, AppErrorKind, attach_correlation};
 use crate::models::{
     DeleteResponse, ListItem, ListSecretsResponse, PutSecretRequest, RotateRequest, SecretResponse,
     VersionInfo, VersionsResponse,
@@ -15,7 +15,7 @@ use crate::models::{
 use crate::path::{build_scope, build_uri, split_name_version, split_prefix};
 use crate::rotate;
 use crate::state::AppState;
-use crate::telemetry::{correlation_layer, request_span, CorrelationId};
+use crate::telemetry::{CorrelationId, correlation_layer, request_span};
 use secrets_core::types::SecretMeta;
 
 #[derive(Deserialize)]

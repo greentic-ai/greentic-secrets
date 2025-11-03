@@ -7,7 +7,7 @@
 //! provided through environment variables.
 
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use greentic_secrets_spec::{
     Envelope, KeyProvider, Scope, SecretListItem, SecretMeta, SecretRecord, SecretUri,
     SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
@@ -15,7 +15,7 @@ use greentic_secrets_spec::{
 use reqwest::blocking::{Client, Response};
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -85,7 +85,7 @@ impl K8sSecretsBackend {
     }
 
     fn ensure_namespace(&self, namespace: &str) -> SecretsResult<()> {
-        let path = format!("/api/v1/namespaces/{}", namespace);
+        let path = format!("/api/v1/namespaces/{namespace}");
         let response = self.request(Method::GET, &path, None)?;
         let status = response.status();
         if status == StatusCode::OK {
@@ -116,7 +116,7 @@ impl K8sSecretsBackend {
     }
 
     fn put_secret(&self, namespace: &str, manifest: Value) -> SecretsResult<()> {
-        let path = format!("/api/v1/namespaces/{}/secrets", namespace);
+        let path = format!("/api/v1/namespaces/{namespace}/secrets");
         let response = self.request(Method::POST, &path, Some(manifest))?;
         let status = response.status();
         let body = response.text().unwrap_or_default();
@@ -130,14 +130,13 @@ impl K8sSecretsBackend {
 
     fn list_versions(&self, namespace: &str, key: &str) -> SecretsResult<Vec<SecretSnapshot>> {
         let mut snapshots = Vec::new();
-        let selector = format!("{}={}", LABEL_KEY, key);
+        let selector = format!("{LABEL_KEY}={key}");
         let selector = percent_encode(&selector);
         let mut continue_token: Option<String> = None;
 
         loop {
             let mut path = format!(
-                "/api/v1/namespaces/{}/secrets?labelSelector={}&limit=100",
-                namespace, selector
+                "/api/v1/namespaces/{namespace}/secrets?labelSelector={selector}&limit=100"
             );
             if let Some(token) = continue_token.as_ref() {
                 path.push_str("&continue=");
@@ -255,7 +254,7 @@ impl SecretsBackend for K8sSecretsBackend {
         let namespace = namespace_for_scope(&self.config, scope);
         let response = self.request(
             Method::GET,
-            &format!("/api/v1/namespaces/{}/secrets?limit=250", namespace),
+            &format!("/api/v1/namespaces/{namespace}/secrets?limit=250"),
             None,
         )?;
 

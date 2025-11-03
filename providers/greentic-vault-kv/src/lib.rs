@@ -7,7 +7,7 @@
 //! data encryption keys.
 
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use greentic_secrets_spec::{
     Envelope, KeyProvider, Scope, SecretListItem, SecretMeta, SecretRecord, SecretUri,
     SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
@@ -15,7 +15,7 @@ use greentic_secrets_spec::{
 use reqwest::blocking::{Client, Response};
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -64,26 +64,29 @@ impl VaultSecretsBackend {
     fn kv_data_path(&self, uri: &SecretUri) -> String {
         let team = uri.scope().team().unwrap_or(TEAM_PLACEHOLDER);
         format!(
-            "{}/{}/{}/{}/{}/{}",
-            self.config.kv_prefix,
-            uri.scope().env(),
-            uri.scope().tenant(),
-            team,
-            uri.category(),
-            uri.name()
+            "{prefix}/{env}/{tenant}/{team}/{category}/{name}",
+            prefix = self.config.kv_prefix,
+            env = uri.scope().env(),
+            tenant = uri.scope().tenant(),
+            team = team,
+            category = uri.category(),
+            name = uri.name()
         )
     }
 
     fn kv_api_path(&self, suffix: &str) -> String {
         format!(
-            "v1/{}/{}",
-            self.config.kv_mount.trim_matches('/'),
-            suffix.trim_start_matches('/')
+            "v1/{mount}/{suffix}",
+            mount = self.config.kv_mount.trim_matches('/'),
+            suffix = suffix.trim_start_matches('/')
         )
     }
 
     fn list_keys(&self, prefix: &str) -> SecretsResult<Vec<String>> {
-        let path = self.kv_api_path(&format!("metadata/{}", prefix.trim_start_matches('/')));
+        let path = self.kv_api_path(&format!(
+            "metadata/{suffix}",
+            suffix = prefix.trim_start_matches('/')
+        ));
         let method = Method::from_bytes(b"LIST").expect("LIST method supported");
         let response = self.request(method, &path, None)?;
         match response.status() {
@@ -108,7 +111,7 @@ impl VaultSecretsBackend {
 
     fn write_secret(&self, uri: &SecretUri, payload: Option<StoredRecord>) -> SecretsResult<u64> {
         let data_path = self.kv_data_path(uri);
-        let path = self.kv_api_path(&format!("data/{}", data_path));
+        let path = self.kv_api_path(&format!("data/{data_path}"));
         let mut data_obj = Map::new();
         if let Some(record) = payload {
             let encoded = serde_json::to_vec(&record).map_err(|err| {
@@ -143,9 +146,9 @@ impl VaultSecretsBackend {
         version: Option<u64>,
     ) -> SecretsResult<Option<SecretSnapshot>> {
         let data_path = self.kv_data_path(uri);
-        let mut path = self.kv_api_path(&format!("data/{}", data_path));
+        let mut path = self.kv_api_path(&format!("data/{data_path}"));
         if let Some(v) = version {
-            path.push_str(&format!("?version={}", v));
+            path.push_str(&format!("?version={v}"));
         }
         let response = self.request(Method::GET, &path, None)?;
         match response.status() {
@@ -190,7 +193,8 @@ impl VaultSecretsBackend {
     }
 
     fn list_versions(&self, uri: &SecretUri) -> SecretsResult<Vec<SecretVersionEntry>> {
-        let metadata_path = self.kv_api_path(&format!("metadata/{}", self.kv_data_path(uri)));
+        let metadata_path =
+            self.kv_api_path(&format!("metadata/{data}", data = self.kv_data_path(uri)));
         let response = self.request(Method::GET, &metadata_path, None)?;
         match response.status() {
             StatusCode::NOT_FOUND => Ok(Vec::new()),
@@ -238,7 +242,7 @@ impl VaultSecretsBackend {
             if category.is_empty() {
                 continue;
             }
-            let names_path = format!("{}/{}", base_path, category);
+            let names_path = format!("{base_path}/{category}");
             for name_key in self.list_keys(&names_path)? {
                 let name = name_key.trim_end_matches('/');
                 if name.is_empty() {

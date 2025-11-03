@@ -7,7 +7,7 @@ use serde_json::json;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
-use crate::auth::{extract_bearer_token, Action, AuthContext};
+use crate::auth::{Action, AuthContext, extract_bearer_token};
 use crate::error::{AppError, AppErrorKind};
 use crate::models::{
     DeleteCommand, DeleteResponse, ErrorResponse, GetCommand, ListCommand, ListItem,
@@ -16,7 +16,7 @@ use crate::models::{
 use crate::path::{build_scope, build_uri, split_prefix};
 use crate::rotate;
 use crate::state::AppState;
-use crate::telemetry::{request_span, CorrelationId, CORRELATION_ID_HEADER};
+use crate::telemetry::{CORRELATION_ID_HEADER, CorrelationId, request_span};
 use secrets_core::types::SecretMeta;
 use uuid::Uuid;
 

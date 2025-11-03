@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::types::{validate_component, validate_version, Scope};
+use crate::types::{Scope, validate_component, validate_version};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::fmt;

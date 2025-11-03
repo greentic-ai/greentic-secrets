@@ -1,11 +1,11 @@
-use axum::body::{to_bytes, Body};
-use axum::http::{header::AUTHORIZATION, Request, StatusCode};
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode, header::AUTHORIZATION};
 #[path = "support/mod.rs"]
 mod support;
 
 use secrets_broker::models::{ListSecretsResponse, SecretResponse};
 use secrets_broker::telemetry::CORRELATION_ID_HEADER;
-use secrets_broker::{http, nats, CorrelationId};
+use secrets_broker::{CorrelationId, http, nats};
 use serde_json::json;
 use support::auth::TestAuth;
 use tower::ServiceExt;
@@ -14,7 +14,10 @@ use uuid::Uuid;
 fn setup_dev_backend_env() -> tempfile::TempDir {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let state_file = dir.path().join("dev.env");
-    std::env::set_var("GREENTIC_DEV_SECRETS_PATH", state_file);
+    // SAFETY: integration test has exclusive control of the process env while running.
+    unsafe {
+        std::env::set_var("GREENTIC_DEV_SECRETS_PATH", state_file);
+    }
     dir
 }
 
@@ -26,7 +29,10 @@ async fn http_and_nats_end_to_end() -> anyhow::Result<()> {
     let app = http::router(state.clone());
 
     let env = "dev";
-    let tenant = format!("tenant-{}", Uuid::new_v4().simple());
+    let tenant = {
+        let id = Uuid::new_v4().simple();
+        format!("tenant-{id}")
+    };
     let category = "configs";
     let name = "service";
     let http_path = format!("/v1/{env}/{tenant}/{category}/{name}");

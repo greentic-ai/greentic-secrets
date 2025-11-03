@@ -14,10 +14,10 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use auth::Authorizer;
+use secrets_core::SecretsBroker;
 use secrets_core::crypto::dek_cache::DekCache;
 use secrets_core::crypto::envelope::EnvelopeService;
 use secrets_core::types::EncryptionAlgorithm;
-use secrets_core::SecretsBroker;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -31,9 +31,12 @@ pub async fn run() -> anyhow::Result<()> {
     let config = BrokerConfig::from_env();
     let state = build_state().await?;
 
-    let http_listener = TcpListener::bind(config.http_addr)
-        .await
-        .with_context(|| format!("failed to bind http listener on {}", config.http_addr))?;
+    let http_listener = TcpListener::bind(config.http_addr).await.with_context(|| {
+        format!(
+            "failed to bind http listener on {addr}",
+            addr = config.http_addr
+        )
+    })?;
 
     let http_addr = http_listener.local_addr()?;
     info!(%http_addr, "http server listening");
@@ -112,7 +115,7 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     let terminate = async {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         match signal(SignalKind::terminate()) {
             Ok(mut stream) => {
                 stream.recv().await;

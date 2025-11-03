@@ -2,8 +2,10 @@ use anyhow::Result;
 use uuid::Uuid;
 
 pub async fn run() -> Result<()> {
-    let raw_prefix = std::env::var("GTS_PREFIX")
-        .unwrap_or_else(|_| format!("gtconf-{}", Uuid::new_v4().simple()));
+    let raw_prefix = std::env::var("GTS_PREFIX").unwrap_or_else(|_| {
+        let id = Uuid::new_v4().simple();
+        format!("gtconf-{id}")
+    });
     let base_prefix = suite::sanitize(&raw_prefix);
 
     #[cfg(feature = "provider-dev")]
@@ -40,7 +42,7 @@ pub async fn run() -> Result<()> {
 }
 
 mod suite {
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
     use greentic_secrets_spec::{
         ContentType, EncryptionAlgorithm, Envelope, SecretMeta, SecretRecord, SecretUri,
         SecretsBackend, SecretsResult, Visibility,
@@ -67,23 +69,19 @@ mod suite {
     }
 
     fn combine_tag(base: &str, provider: &str) -> String {
-        sanitize(&format!("{}-{}", base, provider))
+        sanitize(&format!("{base}-{provider}"))
     }
 
     fn make_scope(tag: &str) -> SecretsResult<greentic_secrets_spec::Scope> {
         greentic_secrets_spec::Scope::new(
-            sanitize(&format!("{}-env", tag)),
-            sanitize(&format!("{}-tenant", tag)),
-            Some(sanitize(&format!("{}-team", tag))),
+            sanitize(&format!("{tag}-env")),
+            sanitize(&format!("{tag}-tenant")),
+            Some(sanitize(&format!("{tag}-team"))),
         )
     }
 
     fn make_uri(scope: &greentic_secrets_spec::Scope, tag: &str) -> SecretsResult<SecretUri> {
-        SecretUri::new(
-            scope.clone(),
-            CATEGORY,
-            sanitize(&format!("{}-secret", tag)),
-        )
+        SecretUri::new(scope.clone(), CATEGORY, sanitize(&format!("{tag}-secret")))
     }
 
     fn make_payload(tag: &str) -> String {
@@ -167,9 +165,11 @@ mod suite {
         assert!(listed.iter().any(|item| item.uri == uri));
 
         let versions = convert(backend.versions(&uri))?;
-        assert!(versions
-            .iter()
-            .any(|v| v.version == put.version && !v.deleted));
+        assert!(
+            versions
+                .iter()
+                .any(|v| v.version == put.version && !v.deleted)
+        );
         assert!(convert(backend.exists(&uri))?);
 
         let deleted = convert(backend.delete(&uri))?;
@@ -202,7 +202,7 @@ mod suite {
 
     #[cfg(feature = "provider-aws")]
     pub(super) async fn run_aws(base: &str) -> Result<()> {
-        use greentic_secrets_provider_aws_sm::{build_backend, BackendComponents};
+        use greentic_secrets_provider_aws_sm::{BackendComponents, build_backend};
 
         run_provider_async(base, "aws", || async {
             let BackendComponents {
@@ -217,7 +217,7 @@ mod suite {
 
     #[cfg(feature = "provider-azure")]
     pub(super) async fn run_azure(base: &str) -> Result<()> {
-        use greentic_secrets_provider_azure_kv::{build_backend, BackendComponents};
+        use greentic_secrets_provider_azure_kv::{BackendComponents, build_backend};
 
         run_provider_async(base, "azure", || async {
             let BackendComponents {
@@ -232,7 +232,7 @@ mod suite {
 
     #[cfg(feature = "provider-gcp")]
     pub(super) async fn run_gcp(base: &str) -> Result<()> {
-        use greentic_secrets_provider_gcp_sm::{build_backend, BackendComponents};
+        use greentic_secrets_provider_gcp_sm::{BackendComponents, build_backend};
 
         run_provider_async(base, "gcp", || async {
             let BackendComponents {
@@ -247,7 +247,7 @@ mod suite {
 
     #[cfg(feature = "provider-k8s")]
     pub(super) async fn run_k8s(base: &str) -> Result<()> {
-        use greentic_secrets_provider_k8s::{build_backend, BackendComponents};
+        use greentic_secrets_provider_k8s::{BackendComponents, build_backend};
 
         run_provider_async(base, "k8s", || async {
             let BackendComponents {
@@ -262,7 +262,7 @@ mod suite {
 
     #[cfg(feature = "provider-vault")]
     pub(super) async fn run_vault(base: &str) -> Result<()> {
-        use greentic_secrets_provider_vault_kv::{build_backend, BackendComponents};
+        use greentic_secrets_provider_vault_kv::{BackendComponents, build_backend};
 
         run_provider_async(base, "vault", || async {
             let BackendComponents {

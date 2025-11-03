@@ -1,7 +1,7 @@
 [package]
 name = "greentic-secrets-runner"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license = "MIT"
 description = "Host bridge for environment-backed secrets with tenant policy enforcement."
 repository = "https://github.com/greentic-ai/greentic-secrets"
@@ -9,4 +9,4 @@ repository = "https://github.com/greentic-ai/greentic-secrets"
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-thiserror = { version = "2" }
+thiserror = { workspace = true }

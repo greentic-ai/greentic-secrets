@@ -4,7 +4,7 @@ use crate::spec_compat::{
     DecryptError, DecryptResult, EncryptionAlgorithm, Envelope, Error, Result, Scope, SecretMeta,
     SecretRecord,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use hkdf::Hkdf;
 use rand::RngCore;
 #[cfg(feature = "crypto-ring")]

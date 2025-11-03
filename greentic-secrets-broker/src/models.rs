@@ -1,5 +1,5 @@
-use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
 use secrets_core::backend::SecretVersion;
 use secrets_core::types::{ContentType, SecretListItem, SecretMeta, Visibility};
 use serde::{Deserialize, Serialize};

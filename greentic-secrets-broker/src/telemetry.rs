@@ -3,8 +3,8 @@ use axum::http::{HeaderValue, Request};
 use axum::middleware::Next;
 use axum::response::Response;
 use opentelemetry::global;
-use tracing::{info_span, Span};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing::{Span, info_span};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";

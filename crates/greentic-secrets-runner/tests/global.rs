@@ -1,22 +1,31 @@
-use greentic_secrets_runner::{secrets_get, Bindings, SecretError, TenantBinding};
+use greentic_secrets_runner::{Bindings, SecretError, TenantBinding, secrets_get};
 
 #[test]
 fn global_secret_allowed_without_tenant() {
     let key = "SHARED_SENTRY_DSN";
-    std::env::set_var(key, "dsn-value");
+    // SAFETY: tests own this key and clear it before finishing.
+    unsafe {
+        std::env::set_var(key, "dsn-value");
+    }
 
     let bindings = Bindings::default().with_global(TenantBinding::new([key]));
 
     let value = secrets_get(&bindings, key, None).expect("global secret should resolve");
     assert_eq!(value, "dsn-value");
 
-    std::env::remove_var(key);
+    // SAFETY: see note above; we restore the environment after the assertion.
+    unsafe {
+        std::env::remove_var(key);
+    }
 }
 
 #[test]
 fn allowed_secret_missing_from_env_returns_not_found() {
     let key = "MISSING_ENV_SECRET";
-    std::env::remove_var(key);
+    // SAFETY: fixture guarantees exclusive access to the test environment key.
+    unsafe {
+        std::env::remove_var(key);
+    }
 
     let bindings = Bindings::default().with_global(TenantBinding::new([key]));
 

@@ -4,7 +4,9 @@ use std::time::Duration;
 
 #[tokio::test]
 async fn put_and_get_json_helpers() {
-    std::env::set_var("GREENTIC_SECRETS_DEV", "1");
+    unsafe {
+        std::env::set_var("GREENTIC_SECRETS_DEV", "1");
+    }
     let core = SecretsCore::builder()
         .tenant("example-tenant")
         .default_ttl(Duration::from_secs(60))

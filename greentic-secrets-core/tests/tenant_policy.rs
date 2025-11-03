@@ -3,7 +3,10 @@ use secrets_core::embedded::SecretsError;
 
 #[tokio::test]
 async fn denies_cross_tenant_access() {
-    std::env::set_var("GREENTIC_SECRETS_DEV", "1");
+    // SAFETY: tests toggle the dev flag globally before constructing the runtime.
+    unsafe {
+        std::env::set_var("GREENTIC_SECRETS_DEV", "1");
+    }
     let core = SecretsCore::builder()
         .tenant("primary")
         .build()
@@ -25,7 +28,9 @@ async fn denies_cross_tenant_access() {
 
 #[tokio::test]
 async fn denies_cross_team_access_for_team_scoped_runtime() {
-    std::env::set_var("GREENTIC_SECRETS_DEV", "1");
+    unsafe {
+        std::env::set_var("GREENTIC_SECRETS_DEV", "1");
+    }
     let core = SecretsCore::builder()
         .tenant("primary")
         .team("payments")

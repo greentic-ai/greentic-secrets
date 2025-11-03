@@ -22,8 +22,10 @@ async fn main() -> anyhow::Result<()> {
         NatsClient::new(raw_client)
     };
 
-    let tenant = std::env::var("SECRETS_EXAMPLE_TENANT")
-        .unwrap_or_else(|_| format!("rotate-{}", Uuid::new_v4().simple()));
+    let tenant = std::env::var("SECRETS_EXAMPLE_TENANT").unwrap_or_else(|_| {
+        let id = Uuid::new_v4().simple();
+        format!("rotate-{id}")
+    });
     let scope = Scope::new("dev".to_string(), tenant, Some("examples".into()))?;
 
     let stored = helpers::put_text(

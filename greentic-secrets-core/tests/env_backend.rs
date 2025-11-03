@@ -1,10 +1,10 @@
 #![cfg(feature = "env")]
 
 use greentic_secrets_spec::{record_from_plain, with_ttl};
-use secrets_core::backend::env::EnvBackend;
-use secrets_core::types::{ContentType, Envelope, SecretMeta, SecretRecord, Visibility};
 use secrets_core::SecretUri;
 use secrets_core::SecretsBackend;
+use secrets_core::backend::env::EnvBackend;
+use secrets_core::types::{ContentType, Envelope, SecretMeta, SecretRecord, Visibility};
 use serde_json::json;
 
 fn build_record(uri: &SecretUri) -> SecretRecord {
@@ -23,15 +23,16 @@ fn build_record(uri: &SecretUri) -> SecretRecord {
 
 fn var_name(uri: &SecretUri) -> String {
     format!(
-        "GTSEC_{}_{}_{}_{}_{}",
-        sanitize(uri.scope().env()),
-        sanitize(uri.scope().tenant()),
-        uri.scope()
+        "GTSEC_{env}_{tenant}_{team}_{category}_{name}",
+        env = sanitize(uri.scope().env()),
+        tenant = sanitize(uri.scope().tenant()),
+        team = uri
+            .scope()
             .team()
             .map(sanitize)
             .unwrap_or_else(|| "_".to_string()),
-        sanitize(uri.category()),
-        sanitize(uri.name())
+        category = sanitize(uri.category()),
+        name = sanitize(uri.name())
     )
 }
 
@@ -51,7 +52,9 @@ fn env_backend_fetches_from_variable() {
     let uri = SecretUri::try_from("secrets://dev/example/_/configs/app").unwrap();
     let record = build_record(&uri);
     let var = var_name(&uri);
-    std::env::set_var(&var, serde_json::to_string(&record).unwrap());
+    unsafe {
+        std::env::set_var(&var, serde_json::to_string(&record).unwrap());
+    }
 
     let fetched = backend.get(&uri, None).unwrap().unwrap();
     assert_eq!(fetched.record.unwrap().meta.uri, record.meta.uri);

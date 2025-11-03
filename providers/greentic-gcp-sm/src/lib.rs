@@ -6,7 +6,7 @@
 //! restore metadata when reading secrets back.
 
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use greentic_secrets_spec::{
     KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
     SecretsError, SecretsResult, VersionedSecret,
@@ -14,7 +14,7 @@ use greentic_secrets_spec::{
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
@@ -111,7 +111,7 @@ impl GcpProviderConfig {
     }
 
     fn bearer(&self) -> String {
-        format!("Bearer {}", self.access_token)
+        format!("Bearer {access_token}", access_token = self.access_token)
     }
 }
 
@@ -193,8 +193,10 @@ impl GcpSecretsBackend {
 
     fn ensure_secret_exists(&self, secret_id: &str) -> SecretsResult<()> {
         let url = format!(
-            "{}/projects/{}/secrets?secretId={}",
-            self.config.secret_endpoint, self.config.project, secret_id
+            "{endpoint}/projects/{project}/secrets?secretId={secret_id}",
+            endpoint = self.config.secret_endpoint,
+            project = self.config.project,
+            secret_id = secret_id
         );
         let body = json!({
             "replication": {"automatic": {}},
@@ -216,7 +218,7 @@ impl GcpSecretsBackend {
     fn write_version(&self, secret_id: &str, payload: &StoredSecret) -> SecretsResult<u64> {
         let resource = self.secret_resource(secret_id);
         let encoded = encode_secret(payload)?;
-        let url = format!("{}:addVersion", resource);
+        let url = format!("{resource}:addVersion");
         let body = json!({
             "payload": {
                 "data": STANDARD.encode(encoded),
@@ -241,7 +243,7 @@ impl GcpSecretsBackend {
     }
 
     fn fetch_version_by_name(&self, name: &str) -> SecretsResult<Option<StoredSecret>> {
-        let url = format!("{}:access", name);
+        let url = format!("{name}:access");
         let response = self.request(Method::GET, url, None)?;
         match response.status() {
             StatusCode::NOT_FOUND => Ok(None),
@@ -280,7 +282,7 @@ impl GcpSecretsBackend {
         let mut page_token: Option<String> = None;
 
         loop {
-            let mut url = format!("{}/versions?pageSize=100", resource);
+            let mut url = format!("{resource}/versions?pageSize=100");
             if let Some(token) = &page_token {
                 url.push_str("&pageToken=");
                 url.push_str(token);
@@ -327,7 +329,7 @@ impl GcpSecretsBackend {
 
     fn fetch_latest(&self, secret_id: &str) -> SecretsResult<Option<StoredSecret>> {
         let resource = self.secret_resource(secret_id);
-        let url = format!("{}/versions/latest:access", resource);
+        let url = format!("{resource}/versions/latest:access");
         let response = self.request(Method::GET, url, None)?;
         match response.status() {
             StatusCode::NOT_FOUND => Ok(None),
@@ -406,14 +408,15 @@ impl SecretsBackend for GcpSecretsBackend {
         _name_prefix: Option<&str>,
     ) -> SecretsResult<Vec<SecretListItem>> {
         let filter = format!(
-            "name:{}-{}-{}",
-            self.config.secret_prefix,
-            scope.env(),
-            scope.tenant()
+            "name:{prefix}-{env}-{tenant}",
+            prefix = self.config.secret_prefix,
+            env = scope.env(),
+            tenant = scope.tenant()
         );
         let url = format!(
-            "{}/projects/{}/secrets",
-            self.config.secret_endpoint, self.config.project
+            "{endpoint}/projects/{project}/secrets",
+            endpoint = self.config.secret_endpoint,
+            project = self.config.project
         );
 
         let response = self
@@ -547,8 +550,10 @@ impl KeyProvider for GcpKmsKeyProvider {
         let payload = json!({
             "plaintext": STANDARD.encode(dek),
         });
-        let response =
-            self.kms_request(&format!("{}:encrypt", self.config.kms_key_name), payload)?;
+        let response = self.kms_request(
+            &format!("{key_name}:encrypt", key_name = self.config.kms_key_name),
+            payload,
+        )?;
         let ciphertext = response
             .get("ciphertext")
             .and_then(|value| value.as_str())
@@ -564,8 +569,10 @@ impl KeyProvider for GcpKmsKeyProvider {
         let payload = json!({
             "ciphertext": STANDARD.encode(wrapped),
         });
-        let response =
-            self.kms_request(&format!("{}:decrypt", self.config.kms_key_name), payload)?;
+        let response = self.kms_request(
+            &format!("{key_name}:decrypt", key_name = self.config.kms_key_name),
+            payload,
+        )?;
         let plaintext = response
             .get("plaintext")
             .and_then(|value| value.as_str())

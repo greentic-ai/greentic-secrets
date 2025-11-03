@@ -102,12 +102,17 @@ mod tests {
         let sa_dir = tmp.path().join("serviceaccount");
         std::fs::create_dir_all(&sa_dir).expect("create service account dir");
 
-        std::env::set_var("KUBERNETES_SERVICE_HOST", "10.0.0.1");
+        // SAFETY: test overrides the probe environment and restores it afterwards.
+        unsafe {
+            std::env::set_var("KUBERNETES_SERVICE_HOST", "10.0.0.1");
+        }
         set_service_account_override(Some(sa_dir));
         assert!(is_kubernetes().await);
 
         set_service_account_override(None);
-        std::env::remove_var("KUBERNETES_SERVICE_HOST");
+        unsafe {
+            std::env::remove_var("KUBERNETES_SERVICE_HOST");
+        }
     }
 }
 

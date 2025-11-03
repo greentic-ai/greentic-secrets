@@ -1,5 +1,5 @@
 use crate::SecretSpec;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 /// Convert an iterator of secret specs into a JSON Schema value.

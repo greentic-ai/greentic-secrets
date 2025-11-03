@@ -1,7 +1,7 @@
 [package]
 name = "greentic-secrets-provider-aws-sm"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license = "MIT"
 description = "AWS Secrets Manager backend for the Greentic secrets core."
 repository = "https://github.com/greentic-ai/greentic-secrets"
@@ -16,12 +16,12 @@ name = "secrets_provider_aws_sm"
 
 [dependencies]
 anyhow = { workspace = true }
-aws-config = "1"
-aws-sdk-secretsmanager = "1"
-aws-sdk-kms = "1"
-aws-types = "1"
-aws-smithy-types = "1"
+aws-config = { workspace = true }
+aws-sdk-secretsmanager = { workspace = true }
+aws-sdk-kms = { workspace = true }
+aws-types = { workspace = true }
+aws-smithy-types = { workspace = true }
 greentic_secrets_spec = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }

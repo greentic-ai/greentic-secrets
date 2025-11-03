@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use crate::auth::Authorizer;
+use secrets_core::SecretsBroker;
 use secrets_core::backend::SecretsBackend;
 use secrets_core::key_provider::KeyProvider;
-use secrets_core::SecretsBroker;
 use tokio::sync::Mutex;
 
 pub type SharedBroker = Arc<Mutex<SecretsBroker<Box<dyn SecretsBackend>, Box<dyn KeyProvider>>>>;

@@ -2,8 +2,8 @@ use secrets_core::embedded::{MemoryBackend, MemoryKeyProvider, SecretsCore};
 use secrets_core::types::SecretRecord;
 use secrets_core::{SecretUri, SecretVersion, SecretsBackend, VersionedSecret};
 use serde_json::json;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 #[derive(Clone, Default)]
@@ -65,7 +65,9 @@ fn build_core_with_backend(backend: CountingBackend, ttl: Duration) -> SecretsCo
         .unwrap();
 
     let previous = std::env::var("GREENTIC_SECRETS_DEV").ok();
-    std::env::set_var("GREENTIC_SECRETS_DEV", "0");
+    unsafe {
+        std::env::set_var("GREENTIC_SECRETS_DEV", "0");
+    }
     let builder = secrets_core::SecretsCore::builder()
         .default_ttl(ttl)
         .tenant("example-tenant")
@@ -74,9 +76,13 @@ fn build_core_with_backend(backend: CountingBackend, ttl: Duration) -> SecretsCo
     let core = rt.block_on(builder.build()).unwrap();
 
     if let Some(prev) = previous {
-        std::env::set_var("GREENTIC_SECRETS_DEV", prev);
+        unsafe {
+            std::env::set_var("GREENTIC_SECRETS_DEV", prev);
+        }
     } else {
-        std::env::remove_var("GREENTIC_SECRETS_DEV");
+        unsafe {
+            std::env::remove_var("GREENTIC_SECRETS_DEV");
+        }
     }
 
     core

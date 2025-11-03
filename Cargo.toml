@@ -17,48 +17,75 @@ members = [
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
+rust-version = "1.88"
 license = "MIT"
-version = "0.1.9"
+version = "0.2.0"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["registry", "env-filter", "fmt", "json"] }
+anyhow = "1"
+assert_cmd = "2.0"
+async-nats = "0.44.2"
+async-trait = "0.1"
+axum = "0.8.6"
+aws-config = "1"
+aws-sdk-kms = "1"
+aws-sdk-secretsmanager = "1"
+aws-smithy-types = "1"
+aws-types = "1"
+base64 = "0.22.1"
+clap = "4.5.8"
+fs2 = "0.4"
+futures = "0.3"
+hex = "0.4"
+hkdf = "0.12"
+hyper = "1"
+jsonwebtoken = { version = "10.1.0", default-features = false }
+lru = "0.16.2"
+once_cell = "1"
+opentelemetry = "0.31.0"
+opentelemetry-otlp = "0.31.0"
+parking_lot = "0.12"
+rand = { version = "0.9.2", features = ["std"] }
+reqwest = { version = "0.12.24", default-features = false }
+ring = "0.17.14"
+rustls = { version = "0.23", default-features = false }
+schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-schemars = "1.0.4"
-anyhow = "1.0.100"
-thiserror = "2.0.17"
-greentic_secrets_api = { package = "greentic-secrets-api", version = "0.1.5", path = "greentic-secrets-api" }
-greentic_secrets_spec = { package = "greentic-secrets-spec", version = "0.1.5", path = "greentic-secrets-spec" }
-greentic_secrets_core = { package = "greentic-secrets-core", version = "0.1.5", path = "greentic-secrets-core" }
-greentic_secrets_broker = { package = "greentic-secrets-broker", version = "0.1.5", path = "greentic-secrets-broker" }
-greentic_secrets = { package = "greentic-secrets", version = "0.1.5", path = "greentic-secrets" }
-greentic_secrets_provider_dev = { package = "greentic-secrets-provider-dev", version = "0.1.5", path = "providers/greentic-dev" }
-greentic_secrets_provider_aws_sm = { package = "greentic-secrets-provider-aws-sm", version = "0.1.5", path = "providers/greentic-aws-sm" }
-greentic_secrets_provider_gcp_sm = { package = "greentic-secrets-provider-gcp-sm", version = "0.1.5", path = "providers/greentic-gcp-sm" }
-greentic_secrets_provider_azure_kv = { package = "greentic-secrets-provider-azure-kv", version = "0.1.5", path = "providers/greentic-azure-kv" }
-greentic_secrets_provider_k8s = { package = "greentic-secrets-provider-k8s", version = "0.1.5", path = "providers/greentic-k8s" }
-greentic_secrets_provider_vault_kv = { package = "greentic-secrets-provider-vault-kv", version = "0.1.5", path = "providers/greentic-vault-kv" }
-secrets-core = { package = "greentic-secrets-core", version = "0.1.5", path = "greentic-secrets-core" }
-secrets-provider-dev = { package = "greentic-secrets-provider-dev", version = "0.1.5", path = "providers/greentic-dev" }
-secrets-provider-aws-sm = { package = "greentic-secrets-provider-aws-sm", version = "0.1.5", path = "providers/greentic-aws-sm" }
-secrets-provider-gcp-sm = { package = "greentic-secrets-provider-gcp-sm", version = "0.1.5", path = "providers/greentic-gcp-sm" }
-secrets-provider-azure-kv = { package = "greentic-secrets-provider-azure-kv", version = "0.1.5", path = "providers/greentic-azure-kv" }
-secrets-provider-k8s = { package = "greentic-secrets-provider-k8s", version = "0.1.5", path = "providers/greentic-k8s" }
-secrets-provider-vault-kv = { package = "greentic-secrets-provider-vault-kv", version = "0.1.5", path = "providers/greentic-vault-kv" }
-greentic_secrets_provider_aws = { package = "greentic-secrets-provider-aws-sm", version = "0.1.5", path = "providers/greentic-aws-sm" }
-greentic_secrets_provider_azure = { package = "greentic-secrets-provider-azure-kv", version = "0.1.5", path = "providers/greentic-azure-kv" }
-greentic_secrets_provider_gcp = { package = "greentic-secrets-provider-gcp-sm", version = "0.1.5", path = "providers/greentic-gcp-sm" }
-greentic_secrets_provider_vault = { package = "greentic-secrets-provider-vault-kv", version = "0.1.5", path = "providers/greentic-vault-kv" }
-greentic_secrets_provider_dev_env = { package = "greentic-secrets-provider-dev", version = "0.1.5", path = "providers/greentic-dev" }
-
-[patch.crates-io]
-base64ct = { path = "vendor/base64ct" }
-jsonwebtoken = { path = "vendor/jsonwebtoken" }
-aws-sdk-kms = { path = "vendor/aws-sdk-kms" }
-aws-sdk-secretsmanager = { path = "vendor/aws-sdk-secretsmanager" }
-aws-sdk-sso = { path = "vendor/aws-sdk-sso" }
-aws-sdk-ssooidc = { path = "vendor/aws-sdk-ssooidc" }
-aws-sdk-sts = { path = "vendor/aws-sdk-sts" }
+serial_test = "3.2.0"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+time = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+tower = "0.5.2"
+tower-http = "0.6.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["registry", "env-filter", "fmt", "json"] }
+url = "2"
+uuid = "1"
+wit-bindgen = "0.47.0"
+greentic_secrets_api = { package = "greentic-secrets-api", version = "0.2.0", path = "greentic-secrets-api" }
+greentic_secrets_spec = { package = "greentic-secrets-spec", version = "0.2.0", path = "greentic-secrets-spec" }
+greentic_secrets_core = { package = "greentic-secrets-core", version = "0.2.0", path = "greentic-secrets-core" }
+greentic_secrets_broker = { package = "greentic-secrets-broker", version = "0.2.0", path = "greentic-secrets-broker" }
+greentic_secrets = { package = "greentic-secrets", version = "0.2.0", path = "greentic-secrets" }
+greentic_secrets_provider_dev = { package = "greentic-secrets-provider-dev", version = "0.2.0", path = "providers/greentic-dev" }
+greentic_secrets_provider_aws_sm = { package = "greentic-secrets-provider-aws-sm", version = "0.2.0", path = "providers/greentic-aws-sm" }
+greentic_secrets_provider_gcp_sm = { package = "greentic-secrets-provider-gcp-sm", version = "0.2.0", path = "providers/greentic-gcp-sm" }
+greentic_secrets_provider_azure_kv = { package = "greentic-secrets-provider-azure-kv", version = "0.2.0", path = "providers/greentic-azure-kv" }
+greentic_secrets_provider_k8s = { package = "greentic-secrets-provider-k8s", version = "0.2.0", path = "providers/greentic-k8s" }
+greentic_secrets_provider_vault_kv = { package = "greentic-secrets-provider-vault-kv", version = "0.2.0", path = "providers/greentic-vault-kv" }
+secrets-core = { package = "greentic-secrets-core", version = "0.2.0", path = "greentic-secrets-core" }
+secrets-provider-dev = { package = "greentic-secrets-provider-dev", version = "0.2.0", path = "providers/greentic-dev" }
+secrets-provider-aws-sm = { package = "greentic-secrets-provider-aws-sm", version = "0.2.0", path = "providers/greentic-aws-sm" }
+secrets-provider-gcp-sm = { package = "greentic-secrets-provider-gcp-sm", version = "0.2.0", path = "providers/greentic-gcp-sm" }
+secrets-provider-azure-kv = { package = "greentic-secrets-provider-azure-kv", version = "0.2.0", path = "providers/greentic-azure-kv" }
+secrets-provider-k8s = { package = "greentic-secrets-provider-k8s", version = "0.2.0", path = "providers/greentic-k8s" }
+secrets-provider-vault-kv = { package = "greentic-secrets-provider-vault-kv", version = "0.2.0", path = "providers/greentic-vault-kv" }
+greentic_secrets_provider_aws = { package = "greentic-secrets-provider-aws-sm", version = "0.2.0", path = "providers/greentic-aws-sm" }
+greentic_secrets_provider_azure = { package = "greentic-secrets-provider-azure-kv", version = "0.2.0", path = "providers/greentic-azure-kv" }
+greentic_secrets_provider_gcp = { package = "greentic-secrets-provider-gcp-sm", version = "0.2.0", path = "providers/greentic-gcp-sm" }
+greentic_secrets_provider_vault = { package = "greentic-secrets-provider-vault-kv", version = "0.2.0", path = "providers/greentic-vault-kv" }
+greentic_secrets_provider_dev_env = { package = "greentic-secrets-provider-dev", version = "0.2.0", path = "providers/greentic-dev" }

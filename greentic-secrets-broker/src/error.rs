@@ -1,10 +1,10 @@
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::telemetry::{correlation_header_value, CorrelationId, CORRELATION_ID_HEADER};
+use crate::telemetry::{CORRELATION_ID_HEADER, CorrelationId, correlation_header_value};
 
 #[derive(Debug, Error)]
 pub enum AppErrorKind {

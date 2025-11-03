@@ -45,7 +45,11 @@ impl SecretSpecRegistry {
         let mut out = String::from("| Name | Description |\n|---|---|\n");
         for spec in self.by_name.values() {
             let desc = spec.description.unwrap_or("");
-            out.push_str(&format!("| `{}` | {} |\n", spec.name, desc));
+            out.push_str(&format!(
+                "| `{name}` | {desc} |\n",
+                name = spec.name,
+                desc = desc
+            ));
         }
         out
     }

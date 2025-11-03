@@ -12,8 +12,8 @@ use async_nats;
 #[cfg(feature = "nats")]
 use futures::StreamExt;
 use lru::LruCache;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::string::FromUtf8Error;
@@ -867,7 +867,7 @@ fn parse_prefix(prefix: &str) -> Result<(Scope, Option<String>, Option<String>),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{sleep, Duration as TokioDuration};
+    use tokio::time::{Duration as TokioDuration, sleep};
 
     fn rt() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
@@ -878,10 +878,12 @@ mod tests {
 
     #[test]
     fn builder_from_env_defaults() {
-        std::env::remove_var("GREENTIC_SECRETS_TENANT");
-        std::env::remove_var("GREENTIC_SECRETS_TEAM");
-        std::env::remove_var("GREENTIC_SECRETS_CACHE_TTL_SECS");
-        std::env::remove_var("GREENTIC_SECRETS_NATS_URL");
+        unsafe {
+            std::env::remove_var("GREENTIC_SECRETS_TENANT");
+            std::env::remove_var("GREENTIC_SECRETS_TEAM");
+            std::env::remove_var("GREENTIC_SECRETS_CACHE_TTL_SECS");
+            std::env::remove_var("GREENTIC_SECRETS_NATS_URL");
+        }
 
         let builder = CoreBuilder::from_env();
         assert!(builder.tenant.is_none());
@@ -974,23 +976,28 @@ mod tests {
 
             core.purge_cache(&[uri_a.to_string()]);
 
-            assert!(core
-                .cached_value(&SecretUri::try_from(uri_a).unwrap())
-                .is_none());
-            assert!(core
-                .cached_value(&SecretUri::try_from(uri_b).unwrap())
-                .is_some());
+            assert!(
+                core.cached_value(&SecretUri::try_from(uri_a).unwrap())
+                    .is_none()
+            );
+            assert!(
+                core.cached_value(&SecretUri::try_from(uri_b).unwrap())
+                    .is_some()
+            );
 
             core.purge_cache(&["secrets://dev/acme/_/configs/*".to_string()]);
-            assert!(core
-                .cached_value(&SecretUri::try_from(uri_b).unwrap())
-                .is_none());
+            assert!(
+                core.cached_value(&SecretUri::try_from(uri_b).unwrap())
+                    .is_none()
+            );
         });
     }
 
     #[test]
     fn auto_detect_skips_when_backends_present() {
-        std::env::remove_var("GREENTIC_SECRETS_FILE_ROOT");
+        unsafe {
+            std::env::remove_var("GREENTIC_SECRETS_FILE_ROOT");
+        }
         rt().block_on(async {
             let builder =
                 CoreBuilder::default().backend(MemoryBackend::new(), MemoryKeyProvider::default());
@@ -1003,13 +1010,17 @@ mod tests {
 
     #[test]
     fn auto_detect_respects_backends_env_override() {
-        std::env::set_var("GREENTIC_SECRETS_BACKENDS", "aws");
-        std::env::remove_var("GREENTIC_SECRETS_FILE_ROOT");
+        unsafe {
+            std::env::set_var("GREENTIC_SECRETS_BACKENDS", "aws");
+            std::env::remove_var("GREENTIC_SECRETS_FILE_ROOT");
+        }
         rt().block_on(async {
             let builder = CoreBuilder::default().auto_detect_backends().await;
             let core = builder.build().await.unwrap();
             assert_eq!(core.config().backends, vec!["memory".to_string()]);
         });
-        std::env::remove_var("GREENTIC_SECRETS_BACKENDS");
+        unsafe {
+            std::env::remove_var("GREENTIC_SECRETS_BACKENDS");
+        }
     }
 }

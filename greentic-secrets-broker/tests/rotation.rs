@@ -9,7 +9,10 @@ use support::auth::TestAuth;
 fn setup_dev_backend_env() -> tempfile::TempDir {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let state_file = dir.path().join("dev-rotate.env");
-    std::env::set_var("GREENTIC_DEV_SECRETS_PATH", state_file);
+    // SAFETY: tests manage this process-wide env var and remove tempdir at drop.
+    unsafe {
+        std::env::set_var("GREENTIC_DEV_SECRETS_PATH", state_file);
+    }
     dir
 }
 
