@@ -26,8 +26,6 @@ pub use state::AppState;
 pub use telemetry::CorrelationId;
 
 pub async fn run() -> anyhow::Result<()> {
-    telemetry::init()?;
-
     let config = BrokerConfig::from_env();
     let state = build_state().await?;
 

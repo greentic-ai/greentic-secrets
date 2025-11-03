@@ -16,7 +16,7 @@ use crate::models::{
 use crate::path::{build_scope, build_uri, split_prefix};
 use crate::rotate;
 use crate::state::AppState;
-use crate::telemetry::{CORRELATION_ID_HEADER, CorrelationId, request_span};
+use crate::telemetry::{CORRELATION_ID_HEADER, CorrelationId, request_span, set_tenant_context};
 use secrets_core::types::SecretMeta;
 use uuid::Uuid;
 
@@ -110,6 +110,13 @@ fn handle_put(
             .authorizer
             .authenticate_nats(message.subject.as_str(), token)
             .await?;
+        set_tenant_context(
+            &subject.env,
+            &subject.tenant,
+            subject.team.as_deref(),
+            &correlation,
+            Some(&auth),
+        );
         state
             .authorizer
             .authorize(&auth, Action::Put, &subject.tenant, subject.team.as_deref())?;
@@ -134,6 +141,13 @@ fn handle_get(
             .authorizer
             .authenticate_nats(message.subject.as_str(), token)
             .await?;
+        set_tenant_context(
+            &subject.env,
+            &subject.tenant,
+            subject.team.as_deref(),
+            &correlation,
+            Some(&auth),
+        );
         state
             .authorizer
             .authorize(&auth, Action::Get, &subject.tenant, subject.team.as_deref())?;
@@ -158,6 +172,13 @@ fn handle_list(
             .authorizer
             .authenticate_nats(message.subject.as_str(), token)
             .await?;
+        set_tenant_context(
+            &subject.env,
+            &subject.tenant,
+            subject.team.as_deref(),
+            &correlation,
+            Some(&auth),
+        );
         state.authorizer.authorize(
             &auth,
             Action::List,
@@ -185,6 +206,13 @@ fn handle_delete(
             .authorizer
             .authenticate_nats(message.subject.as_str(), token)
             .await?;
+        set_tenant_context(
+            &subject.env,
+            &subject.tenant,
+            subject.team.as_deref(),
+            &correlation,
+            Some(&auth),
+        );
         state.authorizer.authorize(
             &auth,
             Action::Delete,
@@ -212,6 +240,13 @@ fn handle_rotate(
             .authorizer
             .authenticate_nats(message.subject.as_str(), token)
             .await?;
+        set_tenant_context(
+            &subject.env,
+            &subject.tenant,
+            subject.team.as_deref(),
+            &correlation,
+            Some(&auth),
+        );
         state.authorizer.authorize(
             &auth,
             Action::Rotate,

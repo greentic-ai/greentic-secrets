@@ -1,6 +1,9 @@
-use anyhow::Result;
+use std::process;
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
-    greentic_secrets_conformance::run().await
+#[greentic_types::telemetry::main(service_name = "greentic-secrets-conformance")]
+async fn main() {
+    if let Err(err) = greentic_secrets_conformance::run().await {
+        eprintln!("conformance suite failed: {err:#}");
+        process::exit(1);
+    }
 }

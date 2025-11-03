@@ -54,6 +54,7 @@ tempfile = { workspace = true }
 anyhow = { workspace = true }
 once_cell = { workspace = true }
 wit-bindgen = { workspace = true }
+greentic-types = { workspace = true }
 
 [lib]
 name = "secrets_core"

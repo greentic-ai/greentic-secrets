@@ -1,9 +1,17 @@
 use secrets_core::SecretsCore;
 use serde_json::json;
+use std::process;
 use std::time::Duration;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+#[greentic_types::telemetry::main(service_name = "greentic-secrets-core-embedded")]
+async fn main() {
+    if let Err(err) = run_example().await {
+        eprintln!("embedded example failed: {err:#}");
+        process::exit(1);
+    }
+}
+
+async fn run_example() -> anyhow::Result<()> {
     let core = SecretsCore::builder()
         .tenant("example-tenant")
         .default_ttl(Duration::from_secs(600))

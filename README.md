@@ -16,6 +16,16 @@ The workspace provides two related entry points:
 | Self-describe & validate a secret spec | `greentic-secrets-core` | `examples/describe_and_validate.rs` | `cargo run -p greentic-secrets-core --example describe_and_validate` |
 | Start the broker (HTTP/NATS) with one backend | `greentic-secrets-broker` | `examples/broker_startup.rs` | `cargo run -p greentic-secrets-broker --example broker_startup` |
 
+### Telemetry
+
+All binaries auto-initialise tracing via `greentic-types`. For local development configure OTLP with:
+
+```
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+RUST_LOG=info
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment=dev
+```
+
 ### Minimal embedded usage (copy-paste)
 ```rust
 use greentic_secrets_core::{SecretsCore, backends::EnvBackend};

@@ -1,8 +1,16 @@
 use secrets_sdk::{helpers, HttpClient, NatsClient, Scope, Visibility};
+use std::process;
 use uuid::Uuid;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+#[greentic_types::telemetry::main(service_name = "greentic-secrets-example-rotate")]
+async fn main() {
+    if let Err(err) = run_example().await {
+        eprintln!("rotate example failed: {err:#}");
+        process::exit(1);
+    }
+}
+
+async fn run_example() -> anyhow::Result<()> {
     let http_base = std::env::var("SECRETS_BROKER_HTTP")
         .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
     let nats_url = std::env::var("SECRETS_BROKER_NATS")

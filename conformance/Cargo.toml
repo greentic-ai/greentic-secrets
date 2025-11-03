@@ -15,6 +15,7 @@ greentic_secrets_provider_gcp_sm = { workspace = true, optional = true }
 greentic_secrets_provider_k8s = { workspace = true, optional = true }
 greentic_secrets_provider_vault_kv = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4"] }
+greentic-types = { workspace = true }
 
 [features]
 default = []

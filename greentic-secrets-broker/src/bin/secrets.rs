@@ -87,8 +87,15 @@ enum Component {
     Weather,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+#[greentic_types::telemetry::main(service_name = "greentic-secrets-cli")]
+async fn main() {
+    if let Err(err) = real_main().await {
+        eprintln!("secrets CLI failed: {err:#}");
+        process::exit(1);
+    }
+}
+
+async fn real_main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Specs { command } => match command {

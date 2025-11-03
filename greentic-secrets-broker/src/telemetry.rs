@@ -2,35 +2,17 @@ use axum::body::Body;
 use axum::http::{HeaderValue, Request};
 use axum::middleware::Next;
 use axum::response::Response;
-use opentelemetry::global;
+use greentic_types::telemetry::set_current_tenant_ctx;
+use greentic_types::{EnvId, TeamId, TenantCtx, TenantId, UserId};
 use tracing::{Span, info_span};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
+
+use crate::auth::AuthContext;
 
 pub const CORRELATION_ID_HEADER: &str = "x-correlation-id";
 
 #[derive(Clone, Debug)]
 pub struct CorrelationId(pub String);
-
-pub fn init() -> anyhow::Result<()> {
-    let env_filter = EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new("info"))?;
-
-    let _ = global::tracer("greentic::secrets");
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .json()
-                .with_current_span(true)
-                .with_span_list(true)
-                .with_target(false),
-        )
-        .try_init()
-        .ok();
-
-    Ok(())
-}
 
 pub fn correlation_header_value(value: &str) -> HeaderValue {
     HeaderValue::from_str(value).expect("correlation id header")
@@ -73,4 +55,25 @@ pub fn request_span(name: &str, correlation_id: &str) -> Span {
         operation = name,
         correlation_id = %correlation_id
     )
+}
+
+pub fn set_tenant_context(
+    env: &str,
+    tenant: &str,
+    team: Option<&str>,
+    correlation: &CorrelationId,
+    auth: Option<&AuthContext>,
+) {
+    let mut ctx =
+        TenantCtx::new(EnvId::from(env), TenantId::from(tenant)).with_provider("secrets-broker");
+    let team_value = team
+        .map(|value| value.to_string())
+        .or_else(|| auth.and_then(|ctx| ctx.team.clone()));
+    ctx = ctx.with_team(team_value.map(TeamId::from));
+    if let Some(auth_ctx) = auth {
+        ctx = ctx.with_user(Some(UserId::from(auth_ctx.subject.as_str())));
+    }
+    let mut final_ctx = ctx;
+    final_ctx.correlation_id = Some(correlation.0.clone());
+    set_current_tenant_ctx(&final_ctx);
 }

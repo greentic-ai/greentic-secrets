@@ -31,3 +31,4 @@ greentic_secrets_provider_gcp = { workspace = true, optional = true }
 greentic_secrets_provider_k8s = { workspace = true, optional = true }
 greentic_secrets_provider_vault = { workspace = true, optional = true }
 greentic_secrets_provider_dev_env = { workspace = true, optional = true }
+greentic-types = { workspace = true }

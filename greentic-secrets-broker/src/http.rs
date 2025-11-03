@@ -15,7 +15,7 @@ use crate::models::{
 use crate::path::{build_scope, build_uri, split_name_version, split_prefix};
 use crate::rotate;
 use crate::state::AppState;
-use crate::telemetry::{CorrelationId, correlation_layer, request_span};
+use crate::telemetry::{CorrelationId, correlation_layer, request_span, set_tenant_context};
 use secrets_core::types::SecretMeta;
 
 #[derive(Deserialize)]
@@ -131,8 +131,16 @@ async fn put_secret(
     name: String,
     request: PutSecretRequest,
 ) -> Result<impl IntoResponse, AppError> {
+    let correlation_for_ctx = correlation.clone();
     let span = request_span("http.put", &correlation.0);
     async move {
+        set_tenant_context(
+            &env,
+            &tenant,
+            team.as_deref(),
+            &correlation_for_ctx,
+            Some(&auth),
+        );
         state
             .authorizer
             .authorize(&auth, Action::Put, &tenant, team.as_deref())?;
@@ -208,16 +216,24 @@ async fn rotate_category(
     category: String,
     request: RotateRequest,
 ) -> Result<impl IntoResponse, AppError> {
-    let correlation_clone = correlation.clone();
+    let correlation_for_ctx = correlation.clone();
+    let correlation_for_job = correlation.clone();
     let span = request_span("http.rotate", &correlation.0);
     async move {
+        set_tenant_context(
+            &env,
+            &tenant,
+            team.as_deref(),
+            &correlation_for_ctx,
+            Some(&auth),
+        );
         state
             .authorizer
             .authorize(&auth, Action::Rotate, &tenant, team.as_deref())?;
         let scope = build_scope(&env, &tenant, team.as_deref())?;
         let job_id = request
             .job_id
-            .unwrap_or_else(|| correlation_clone.0.clone());
+            .unwrap_or_else(|| correlation_for_job.0.clone());
         let response =
             rotate::execute_rotation(state.clone(), scope, &category, job_id, &auth.actor).await?;
         Ok((StatusCode::ACCEPTED, Json(response)))
@@ -266,8 +282,16 @@ async fn get_secret(
     category: String,
     name_with_version: String,
 ) -> Result<impl IntoResponse, AppError> {
+    let correlation_for_ctx = correlation.clone();
     let span = request_span("http.get", &correlation.0);
     async move {
+        set_tenant_context(
+            &env,
+            &tenant,
+            team.as_deref(),
+            &correlation_for_ctx,
+            Some(&auth),
+        );
         state
             .authorizer
             .authorize(&auth, Action::Get, &tenant, team.as_deref())?;
@@ -326,8 +350,16 @@ async fn list_secrets(
     team: Option<String>,
     query: ListQuery,
 ) -> Result<impl IntoResponse, AppError> {
+    let correlation_for_ctx = correlation.clone();
     let span = request_span("http.list", &correlation.0);
     async move {
+        set_tenant_context(
+            &env,
+            &tenant,
+            team.as_deref(),
+            &correlation_for_ctx,
+            Some(&auth),
+        );
         state
             .authorizer
             .authorize(&auth, Action::List, &tenant, team.as_deref())?;
@@ -388,8 +420,16 @@ async fn list_versions(
     category: String,
     name: String,
 ) -> Result<impl IntoResponse, AppError> {
+    let correlation_for_ctx = correlation.clone();
     let span = request_span("http.versions", &correlation.0);
     async move {
+        set_tenant_context(
+            &env,
+            &tenant,
+            team.as_deref(),
+            &correlation_for_ctx,
+            Some(&auth),
+        );
         state
             .authorizer
             .authorize(&auth, Action::List, &tenant, team.as_deref())?;
@@ -449,8 +489,16 @@ async fn delete_secret(
     category: String,
     name: String,
 ) -> Result<impl IntoResponse, AppError> {
+    let correlation_for_ctx = correlation.clone();
     let span = request_span("http.delete", &correlation.0);
     async move {
+        set_tenant_context(
+            &env,
+            &tenant,
+            team.as_deref(),
+            &correlation_for_ctx,
+            Some(&auth),
+        );
         state
             .authorizer
             .authorize(&auth, Action::Delete, &tenant, team.as_deref())?;
