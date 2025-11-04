@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use tokio::task;
 
 const DEFAULT_PREFIX: &str = "gtsec";
 const DEFAULT_STAGE: &str = "AWSCURRENT";
@@ -112,6 +113,27 @@ pub struct AwsSecretsBackend {
     runtime: Arc<Runtime>,
 }
 
+async fn fetch_secret_version_inner(
+    client: SecretsManagerClient,
+    secret_id: String,
+    version_id: Option<String>,
+) -> SecretsResult<Option<StoredSecret>> {
+    let mut request = client.get_secret_value().secret_id(secret_id);
+    if let Some(version) = version_id {
+        request = request.version_id(version);
+    }
+    match request.send().await {
+        Ok(output) => deserialize_secret_payload(output.secret_string(), output.secret_binary()),
+        Err(err) => {
+            if is_not_found(&err) {
+                Ok(None)
+            } else {
+                Err(storage_error("get_secret_value", err))
+            }
+        }
+    }
+}
+
 impl AwsSecretsBackend {
     fn new(client: SecretsManagerClient, config: AwsProviderConfig, runtime: Arc<Runtime>) -> Self {
         Self {
@@ -123,32 +145,20 @@ impl AwsSecretsBackend {
 
     fn block_on<F, T>(&self, fut: F) -> T
     where
-        F: std::future::Future<Output = T>,
+        F: std::future::Future<Output = T> + Send + 'static,
+        T: Send + 'static,
     {
-        self.runtime.block_on(fut)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            task::block_in_place(|| handle.block_on(fut))
+        } else {
+            self.runtime.block_on(fut)
+        }
     }
 
     fn fetch_latest_version(&self, secret_id: &str) -> SecretsResult<Option<StoredSecret>> {
-        self.block_on(async {
-            match self
-                .client
-                .get_secret_value()
-                .secret_id(secret_id)
-                .send()
-                .await
-            {
-                Ok(output) => {
-                    deserialize_secret_payload(output.secret_string(), output.secret_binary())
-                }
-                Err(err) => {
-                    if is_not_found(&err) {
-                        Ok(None)
-                    } else {
-                        Err(storage_error("get_secret_value", err))
-                    }
-                }
-            }
-        })
+        let client = self.client.clone();
+        let secret_id = secret_id.to_owned();
+        self.block_on(async move { fetch_secret_version_inner(client, secret_id, None).await })
     }
 
     fn fetch_version_by_id(
@@ -156,40 +166,25 @@ impl AwsSecretsBackend {
         secret_id: &str,
         version_id: &str,
     ) -> SecretsResult<Option<StoredSecret>> {
-        self.block_on(async {
-            match self
-                .client
-                .get_secret_value()
-                .secret_id(secret_id)
-                .version_id(version_id)
-                .send()
-                .await
-            {
-                Ok(output) => {
-                    deserialize_secret_payload(output.secret_string(), output.secret_binary())
-                }
-                Err(err) => {
-                    if is_not_found(&err) {
-                        Ok(None)
-                    } else {
-                        Err(storage_error("get_secret_value", err))
-                    }
-                }
-            }
+        let client = self.client.clone();
+        let secret_id = secret_id.to_owned();
+        let version_id = version_id.to_owned();
+        self.block_on(async move {
+            fetch_secret_version_inner(client, secret_id, Some(version_id)).await
         })
     }
 
     fn load_all_versions(&self, uri: &SecretUri) -> SecretsResult<Vec<StoredSecret>> {
+        let client = self.client.clone();
         let secret_id = self.config.secret_name(uri);
-        self.block_on(async {
+        self.block_on(async move {
             let mut collected = Vec::new();
             let mut token: Option<String> = None;
 
             loop {
-                let mut request = self
-                    .client
+                let mut request = client
                     .list_secret_version_ids()
-                    .secret_id(&secret_id)
+                    .secret_id(secret_id.clone())
                     .include_deprecated(true);
 
                 if let Some(ref next) = token {
@@ -208,7 +203,13 @@ impl AwsSecretsBackend {
 
                 for entry in response.versions() {
                     if let Some(version_id) = entry.version_id() {
-                        if let Some(stored) = self.fetch_version_by_id(&secret_id, version_id)? {
+                        if let Some(stored) = fetch_secret_version_inner(
+                            client.clone(),
+                            secret_id.clone(),
+                            Some(version_id.to_string()),
+                        )
+                        .await?
+                        {
                             collected.push(stored);
                         }
                     }
@@ -232,17 +233,18 @@ impl AwsSecretsBackend {
         payload: &str,
         record: Option<&SecretRecord>,
     ) -> SecretsResult<bool> {
-        self.block_on(async {
-            let mut request = self
-                .client
+        let client = self.client.clone();
+        let secret_id = secret_id.to_owned();
+        let payload = payload.to_owned();
+        let description = record.and_then(|rec| rec.meta.description.clone());
+        self.block_on(async move {
+            let mut request = client
                 .create_secret()
-                .name(secret_id)
-                .secret_string(payload);
-            if let Some(record) = record {
-                if let Some(description) = record.meta.description.clone() {
-                    if !description.is_empty() {
-                        request = request.description(description);
-                    }
+                .name(secret_id.clone())
+                .secret_string(payload.clone());
+            if let Some(desc) = description.as_ref() {
+                if !desc.is_empty() {
+                    request = request.description(desc.clone());
                 }
             }
 
@@ -261,13 +263,16 @@ impl AwsSecretsBackend {
     }
 
     fn write_new_version(&self, secret_id: &str, payload: &str) -> SecretsResult<()> {
-        self.block_on(async {
-            match self
-                .client
+        let client = self.client.clone();
+        let secret_id = secret_id.to_owned();
+        let payload = payload.to_owned();
+        let version_stage = self.config.version_stage.clone();
+        self.block_on(async move {
+            match client
                 .put_secret_value()
                 .secret_id(secret_id)
                 .secret_string(payload)
-                .set_version_stages(Some(vec![self.config.version_stage.clone()]))
+                .set_version_stages(Some(vec![version_stage]))
                 .send()
                 .await
             {
@@ -284,13 +289,20 @@ impl AwsSecretsBackend {
         name_prefix: Option<&str>,
     ) -> SecretsResult<Vec<SecretListItem>> {
         let prefix = self.config.scope_prefix(scope);
+        let client = self.client.clone();
+        let secret_prefix = self.config.secret_prefix.clone();
+        let scope_env = scope.env().to_string();
+        let scope_tenant = scope.tenant().to_string();
+        let scope_team = scope.team().map(|s| s.to_string());
+        let category_prefix = category_prefix.map(|s| s.to_string());
+        let name_prefix = name_prefix.map(|s| s.to_string());
 
-        self.block_on(async {
+        self.block_on(async move {
             let mut items = Vec::new();
             let mut token: Option<String> = None;
 
             loop {
-                let mut request = self.client.list_secrets();
+                let mut request = client.list_secrets();
                 let filter = Filter::builder()
                     .key(FilterNameStringType::Name)
                     .values(prefix.clone())
@@ -307,34 +319,41 @@ impl AwsSecretsBackend {
 
                 for entry in response.secret_list() {
                     let name = match entry.name() {
-                        Some(value) => value,
+                        Some(value) => value.to_string(),
                         None => continue,
                     };
                     if !name.starts_with(&prefix) {
                         continue;
                     }
-                    let uri = match parse_secret_name(&self.config.secret_prefix, name) {
+                    let uri = match parse_secret_name(&secret_prefix, &name) {
                         Some(uri) => uri,
                         None => continue,
                     };
-                    if uri.scope().env() != scope.env() || uri.scope().tenant() != scope.tenant() {
+                    if uri.scope().env() != scope_env {
                         continue;
                     }
-                    if scope.team().is_some() && uri.scope().team() != scope.team() {
+                    if uri.scope().tenant() != scope_tenant {
                         continue;
                     }
-                    if let Some(prefix) = category_prefix {
-                        if !uri.category().starts_with(prefix) {
+                    if let Some(ref team) = scope_team {
+                        if uri.scope().team() != Some(team.as_str()) {
                             continue;
                         }
                     }
-                    if let Some(prefix) = name_prefix {
-                        if !uri.name().starts_with(prefix) {
+                    if let Some(ref cat_prefix) = category_prefix {
+                        if !uri.category().starts_with(cat_prefix) {
+                            continue;
+                        }
+                    }
+                    if let Some(ref name_prefix) = name_prefix {
+                        if !uri.name().starts_with(name_prefix) {
                             continue;
                         }
                     }
 
-                    if let Some(stored) = self.fetch_latest_version(name)? {
+                    if let Some(stored) =
+                        fetch_secret_version_inner(client.clone(), name.clone(), None).await?
+                    {
                         if stored.deleted {
                             continue;
                         }
@@ -476,9 +495,14 @@ impl AwsKmsKeyProvider {
 
     fn block_on<F, T>(&self, fut: F) -> T
     where
-        F: std::future::Future<Output = T>,
+        F: std::future::Future<Output = T> + Send + 'static,
+        T: Send + 'static,
     {
-        self.runtime.block_on(fut)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            task::block_in_place(|| handle.block_on(fut))
+        } else {
+            self.runtime.block_on(fut)
+        }
     }
 
     fn context(scope: &Scope) -> HashMap<String, String> {
@@ -495,13 +519,15 @@ impl AwsKmsKeyProvider {
 impl KeyProvider for AwsKmsKeyProvider {
     fn wrap_dek(&self, scope: &Scope, dek: &[u8]) -> SecretsResult<Vec<u8>> {
         let context = Self::context(scope);
-        self.block_on(async {
-            match self
-                .client
+        let client = self.client.clone();
+        let key_id = self.key_id.clone();
+        let dek = dek.to_vec();
+        self.block_on(async move {
+            match client
                 .encrypt()
-                .key_id(&self.key_id)
+                .key_id(&key_id)
                 .set_encryption_context(Some(context))
-                .plaintext(KmsBlob::new(dek.to_vec()))
+                .plaintext(KmsBlob::new(dek))
                 .send()
                 .await
             {
@@ -518,13 +544,15 @@ impl KeyProvider for AwsKmsKeyProvider {
 
     fn unwrap_dek(&self, scope: &Scope, wrapped: &[u8]) -> SecretsResult<Vec<u8>> {
         let context = Self::context(scope);
-        self.block_on(async {
-            match self
-                .client
+        let client = self.client.clone();
+        let key_id = self.key_id.clone();
+        let wrapped = wrapped.to_vec();
+        self.block_on(async move {
+            match client
                 .decrypt()
-                .key_id(&self.key_id)
+                .key_id(&key_id)
                 .set_encryption_context(Some(context))
-                .ciphertext_blob(KmsBlob::new(wrapped.to_vec()))
+                .ciphertext_blob(KmsBlob::new(wrapped))
                 .send()
                 .await
             {

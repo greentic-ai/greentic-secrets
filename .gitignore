@@ -8,3 +8,6 @@
 .env.*
 !/.env.example
 *.pem
+scripts/azurekv-certs/*
+!scripts/azurekv-certs/.gitkeep
+scripts/scripts/

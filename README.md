@@ -16,6 +16,23 @@ The workspace provides two related entry points:
 | Self-describe & validate a secret spec | `greentic-secrets-core` | `examples/describe_and_validate.rs` | `cargo run -p greentic-secrets-core --example describe_and_validate` |
 | Start the broker (HTTP/NATS) with one backend | `greentic-secrets-broker` | `examples/broker_startup.rs` | `cargo run -p greentic-secrets-broker --example broker_startup` |
 
+## PR lane (emulators)
+
+Spin up throwaway backends that mimic AWS Secrets Manager, Azure Key Vault, and Vault for PR validation:
+
+1. (Optional) `cp scripts/e2e.env.example scripts/e2e.env` and edit ports/tokens if needed.
+2. `make e2e` boots Docker Compose (`scripts/compose.e2e.yml`), seeds fixtures (`scripts/seed/*.sh`), runs the conformance crate, then tears everything down.
+   3. Individual targets are available when iterating locally:
+      - `make e2e-up` / `make e2e-down` to manage LocalStack (4566), Azure KV emulator (maps host `8080` → container `4997`, HTTPS), and Vault dev (8200).
+        Override `AZURE_KV_IMAGE` or `AZURE_KV_PORT` to match your Docker setup (default image `jamesgoulddev/azure-keyvault-emulator:2.6.6`).
+        Azure KV certificate/database files (self-signed with password `emulator`) live in `scripts/azurekv-certs/`; `make e2e-up` regenerates them with `openssl`/`sqlite3` when missing.
+        The seeder obtains a stub bearer token from the emulator automatically (override via `AZURE_KEYVAULT_BEARER_TOKEN` if needed). TLS verification is skipped when the URI is `https://127...` unless `AZURE_KEYVAULT_INSECURE_SKIP_VERIFY=0` is set.
+        LocalStack-compatible AWS credentials (`AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY/SESSION_TOKEN = test`) and a dummy `GREENTIC_AWS_KMS_KEY_ID` are pre-filled in `scripts/e2e.env.example`.
+   - `make e2e-seed` to re-run seeders.
+   - `make e2e-test` to execute `greentic-secrets-conformance` with the env from `scripts/e2e.env` (falls back to `.env.example`).
+
+Each seeder is idempotent and logs the exact REST/CLI calls used so fixtures stay reproducible in CI.
+
 ### Telemetry
 
 All binaries auto-initialise tracing via `greentic-types`. For local development configure OTLP with:
