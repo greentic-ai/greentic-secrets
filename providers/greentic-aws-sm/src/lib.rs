@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use aws_config::BehaviorVersion;
 use aws_sdk_kms::{Client as KmsClient, primitives::Blob as KmsBlob};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
-use aws_sdk_secretsmanager::error::SdkError;
+use aws_sdk_secretsmanager::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_secretsmanager::operation::list_secret_version_ids::ListSecretVersionIdsError;
 use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType};
 use aws_types::region::Region;
 use greentic_secrets_spec::{
@@ -12,7 +13,7 @@ use greentic_secrets_spec::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 use tokio::task;
 
@@ -24,6 +25,42 @@ const KMS_KEY_ENV: &str = "GREENTIC_AWS_KMS_KEY_ID";
 const REGION_ENV: &str = "GREENTIC_AWS_REGION";
 const TEAM_PLACEHOLDER: &str = "_";
 
+static AWS_RUNTIME: OnceLock<&'static Runtime> = OnceLock::new();
+
+struct ManagedRuntime {
+    inner: &'static Runtime,
+}
+
+impl ManagedRuntime {
+    fn new() -> Result<Self> {
+        if let Some(existing) = AWS_RUNTIME.get() {
+            return Ok(Self { inner: existing });
+        }
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .context("failed to create tokio runtime for aws backend")?;
+
+        let leaked = Box::leak(Box::new(runtime));
+        let _ = AWS_RUNTIME.set(leaked);
+        let inner = *AWS_RUNTIME
+            .get()
+            .expect("aws runtime should be initialised");
+
+        Ok(Self { inner })
+    }
+
+    fn block_on<F, T>(&self, fut: F) -> T
+    where
+        F: std::future::Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.inner.block_on(fut)
+    }
+}
+
 /// Components returned for integration with the broker/core wiring.
 pub struct BackendComponents {
     pub backend: Box<dyn SecretsBackend>,
@@ -34,13 +71,7 @@ pub struct BackendComponents {
 pub async fn build_backend() -> Result<BackendComponents> {
     let (config, shared_config) = AwsProviderConfig::load_from_env().await?;
 
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .context("failed to create tokio runtime for aws backend")?,
-    );
+    let runtime = Arc::new(ManagedRuntime::new()?);
 
     let secrets_client = SecretsManagerClient::new(&shared_config);
     let kms_client = KmsClient::new(&shared_config);
@@ -110,7 +141,7 @@ impl AwsProviderConfig {
 pub struct AwsSecretsBackend {
     client: SecretsManagerClient,
     config: AwsProviderConfig,
-    runtime: Arc<Runtime>,
+    runtime: Arc<ManagedRuntime>,
 }
 
 async fn fetch_secret_version_inner(
@@ -135,7 +166,11 @@ async fn fetch_secret_version_inner(
 }
 
 impl AwsSecretsBackend {
-    fn new(client: SecretsManagerClient, config: AwsProviderConfig, runtime: Arc<Runtime>) -> Self {
+    fn new(
+        client: SecretsManagerClient,
+        config: AwsProviderConfig,
+        runtime: Arc<ManagedRuntime>,
+    ) -> Self {
         Self {
             client,
             config,
@@ -161,19 +196,6 @@ impl AwsSecretsBackend {
         self.block_on(async move { fetch_secret_version_inner(client, secret_id, None).await })
     }
 
-    fn fetch_version_by_id(
-        &self,
-        secret_id: &str,
-        version_id: &str,
-    ) -> SecretsResult<Option<StoredSecret>> {
-        let client = self.client.clone();
-        let secret_id = secret_id.to_owned();
-        let version_id = version_id.to_owned();
-        self.block_on(async move {
-            fetch_secret_version_inner(client, secret_id, Some(version_id)).await
-        })
-    }
-
     fn load_all_versions(&self, uri: &SecretUri) -> SecretsResult<Vec<StoredSecret>> {
         let client = self.client.clone();
         let secret_id = self.config.secret_name(uri);
@@ -196,6 +218,12 @@ impl AwsSecretsBackend {
                     Err(err) => {
                         if is_not_found(&err) {
                             return Ok(Vec::new());
+                        }
+                        if list_versions_unsupported(&err) {
+                            let latest =
+                                fetch_secret_version_inner(client.clone(), secret_id.clone(), None)
+                                    .await?;
+                            return Ok(latest.into_iter().collect());
                         }
                         return Err(storage_error("list_secret_version_ids", err));
                     }
@@ -481,11 +509,11 @@ impl SecretsBackend for AwsSecretsBackend {
 pub struct AwsKmsKeyProvider {
     client: KmsClient,
     key_id: String,
-    runtime: Arc<Runtime>,
+    runtime: Arc<ManagedRuntime>,
 }
 
 impl AwsKmsKeyProvider {
-    fn new(client: KmsClient, config: AwsProviderConfig, runtime: Arc<Runtime>) -> Self {
+    fn new(client: KmsClient, config: AwsProviderConfig, runtime: Arc<ManagedRuntime>) -> Self {
         Self {
             client,
             key_id: config.kms_key_id,
@@ -668,4 +696,15 @@ where
     T: std::fmt::Display,
 {
     SecretsError::Storage(format!("{operation} failed: {err}"))
+}
+
+fn list_versions_unsupported(err: &SdkError<ListSecretVersionIdsError>) -> bool {
+    match err {
+        SdkError::DispatchFailure(_) => true,
+        SdkError::ServiceError(ctx) => matches!(
+            ctx.err().code(),
+            Some("NotImplementedException") | Some("UnknownOperationException")
+        ),
+        _ => false,
+    }
 }

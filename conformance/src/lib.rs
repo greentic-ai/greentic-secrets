@@ -1,3 +1,5 @@
+mod util;
+
 use anyhow::Result;
 use uuid::Uuid;
 
@@ -15,7 +17,17 @@ pub async fn run() -> Result<()> {
     suite::run_aws(&base_prefix).await?;
 
     #[cfg(feature = "provider-azure")]
-    suite::run_azure(&base_prefix).await?;
+    {
+        match suite::azure_preflight().await {
+            suite::AzurePreflight::Ready(info) => {
+                info.log();
+                suite::run_azure(&base_prefix).await?;
+            }
+            suite::AzurePreflight::Skipped { reason } => {
+                println!("Azure suite skipped: {reason}");
+            }
+        }
+    }
 
     #[cfg(feature = "provider-gcp")]
     suite::run_gcp(&base_prefix).await?;
@@ -44,13 +56,195 @@ pub async fn run() -> Result<()> {
 mod suite {
     use anyhow::{Result, anyhow};
     use greentic_secrets_spec::{
-        ContentType, EncryptionAlgorithm, Envelope, SecretMeta, SecretRecord, SecretUri,
-        SecretsBackend, SecretsResult, Visibility,
+        ContentType, EncryptionAlgorithm, Envelope, KeyProvider, SecretMeta, SecretRecord,
+        SecretUri, SecretsBackend, SecretsResult, Visibility,
     };
+    #[cfg(feature = "provider-azure")]
+    use reqwest::StatusCode;
+    #[cfg(feature = "provider-azure")]
+    use serde::Deserialize;
     use std::time::{SystemTime, UNIX_EPOCH};
+    #[cfg(feature = "provider-azure")]
+    use std::{env, time::Duration};
     use tokio::task;
 
     const CATEGORY: &str = "conformance";
+
+    #[cfg(feature = "provider-azure")]
+    pub(super) enum AzurePreflight {
+        Ready(AzurePreflightInfo),
+        Skipped { reason: String },
+    }
+
+    #[cfg(feature = "provider-azure")]
+    pub(super) struct AzurePreflightInfo {
+        scope: String,
+        vault_url: String,
+        expires_in: Duration,
+    }
+
+    #[cfg(feature = "provider-azure")]
+    impl AzurePreflightInfo {
+        pub(super) fn log(&self) {
+            println!(
+                "Azure KV preflight successful: vault_url={}, scope={}, token_expires_in={}s",
+                self.vault_url,
+                self.scope,
+                self.expires_in.as_secs()
+            );
+        }
+    }
+
+    #[cfg(feature = "provider-azure")]
+    pub(super) async fn azure_preflight() -> AzurePreflight {
+        match AzureCredentials::gather() {
+            Err(reason) => AzurePreflight::Skipped { reason },
+            Ok(creds) => match fetch_access_token(&creds).await {
+                Ok(info) => AzurePreflight::Ready(info),
+                Err(reason) => AzurePreflight::Skipped { reason },
+            },
+        }
+    }
+
+    #[cfg(feature = "provider-azure")]
+    struct AzureCredentials {
+        tenant_id: String,
+        client_id: String,
+        client_secret: String,
+        scope: String,
+        vault_url: String,
+    }
+
+    #[cfg(feature = "provider-azure")]
+    impl AzureCredentials {
+        fn gather() -> Result<Self, String> {
+            let mut missing = Vec::new();
+            let mut diagnostics = Vec::new();
+
+            let tenant_id = match env::var("AZURE_TENANT_ID") {
+                Ok(value) if !value.trim().is_empty() => value,
+                other => {
+                    missing.push("AZURE_TENANT_ID");
+                    diagnostics.push(format!("AZURE_TENANT_ID resolved to {:?}", other));
+                    String::new()
+                }
+            };
+
+            let client_id = match env::var("AZURE_CLIENT_ID") {
+                Ok(value) if !value.trim().is_empty() => value,
+                other => {
+                    missing.push("AZURE_CLIENT_ID");
+                    diagnostics.push(format!("AZURE_CLIENT_ID resolved to {:?}", other));
+                    String::new()
+                }
+            };
+
+            let client_secret = match env::var("AZURE_CLIENT_SECRET") {
+                Ok(value) if !value.trim().is_empty() => value,
+                other => {
+                    missing.push("AZURE_CLIENT_SECRET");
+                    diagnostics.push(format!("AZURE_CLIENT_SECRET resolved to {:?}", other));
+                    String::new()
+                }
+            };
+
+            let vault_url = match env::var("AZURE_KEYVAULT_URL")
+                .or_else(|_| env::var("AZURE_KEYVAULT_URI"))
+                .or_else(|_| env::var("GREENTIC_AZURE_VAULT_URI"))
+            {
+                Ok(value) if !value.trim().is_empty() => value,
+                other => {
+                    missing.push("AZURE_KEYVAULT_URL");
+                    diagnostics.push(format!("AZURE_KEYVAULT_URL resolved to {:?}", other));
+                    String::new()
+                }
+            };
+
+            if !missing.is_empty() {
+                let mut message = format!(
+                    "Azure suite skipped: missing env vars {}",
+                    missing.join(", ")
+                );
+                if !diagnostics.is_empty() {
+                    message.push_str("; detail: ");
+                    message.push_str(&diagnostics.join("; "));
+                }
+                return Err(message);
+            }
+
+            let scope = env::var("AZURE_KV_SCOPE")
+                .unwrap_or_else(|_| "https://vault.azure.net/.default".to_string());
+
+            Ok(Self {
+                tenant_id,
+                client_id,
+                client_secret,
+                scope,
+                vault_url,
+            })
+        }
+    }
+
+    #[cfg(feature = "provider-azure")]
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct TokenCheckResponse {
+        access_token: String,
+        #[serde(default)]
+        expires_in: Option<u64>,
+    }
+
+    #[cfg(feature = "provider-azure")]
+    async fn fetch_access_token(creds: &AzureCredentials) -> Result<AzurePreflightInfo, String> {
+        let token_url = format!(
+            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+            creds.tenant_id
+        );
+        let params = [
+            ("client_id", creds.client_id.as_str()),
+            ("client_secret", creds.client_secret.as_str()),
+            ("scope", creds.scope.as_str()),
+            ("grant_type", "client_credentials"),
+        ];
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|err| format!("failed to build http client: {err}"))?;
+
+        let response = client
+            .post(&token_url)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|err| format!("token request failed: {err}"))?;
+
+        let status = response.status();
+        let raw_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<body unavailable>".into());
+
+        if status != StatusCode::OK {
+            return Err(format!(
+                "Azure suite skipped: token endpoint returned {status}. body={raw_body}"
+            ));
+        }
+
+        let payload: TokenCheckResponse = serde_json::from_str(&raw_body).map_err(|err| {
+            format!(
+                "Azure suite skipped: failed to parse token response: {err}. raw_body={raw_body}"
+            )
+        })?;
+
+        let expires = payload.expires_in.unwrap_or(3600);
+
+        Ok(AzurePreflightInfo {
+            scope: creds.scope.clone(),
+            vault_url: creds.vault_url.clone(),
+            expires_in: Duration::from_secs(expires.max(60)),
+        })
+    }
 
     pub(super) fn sanitize(value: &str) -> String {
         let mut out = String::new();
@@ -209,8 +403,7 @@ mod suite {
                 backend,
                 key_provider,
             } = build_backend().await?;
-            drop(key_provider);
-            Ok(backend)
+            Ok((backend, Some(key_provider)))
         })
         .await
     }
@@ -224,8 +417,7 @@ mod suite {
                 backend,
                 key_provider,
             } = build_backend().await?;
-            drop(key_provider);
-            Ok(backend)
+            Ok((backend, Some(key_provider)))
         })
         .await
     }
@@ -239,8 +431,7 @@ mod suite {
                 backend,
                 key_provider,
             } = build_backend().await?;
-            drop(key_provider);
-            Ok(backend)
+            Ok((backend, Some(key_provider)))
         })
         .await
     }
@@ -254,8 +445,7 @@ mod suite {
                 backend,
                 key_provider,
             } = build_backend().await?;
-            drop(key_provider);
-            Ok(backend)
+            Ok((backend, Some(key_provider)))
         })
         .await
     }
@@ -269,8 +459,7 @@ mod suite {
                 backend,
                 key_provider,
             } = build_backend().await?;
-            drop(key_provider);
-            Ok(backend)
+            Ok((backend, Some(key_provider)))
         })
         .await
     }
@@ -279,18 +468,25 @@ mod suite {
     async fn run_provider_async<B, Fut>(base: &str, provider: &str, builder: B) -> Result<()>
     where
         B: Send + 'static + FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<Box<dyn SecretsBackend>>> + Send + 'static,
+        Fut: std::future::Future<
+                Output = Result<(Box<dyn SecretsBackend>, Option<Box<dyn KeyProvider>>)>,
+            > + Send
+            + 'static,
     {
         let tag = combine_tag(base, provider);
         let scope = convert(make_scope(&tag))?;
         let uri = convert(make_uri(&scope, &tag))?;
         let payload = make_payload(&tag);
 
-        let backend = builder().await?;
+        let (backend, key_provider) = builder().await?;
 
-        task::spawn_blocking(move || run_cycle(backend, scope, uri, payload))
-            .await
-            .map_err(|err| anyhow!("provider task panicked: {err}"))??;
+        task::spawn_blocking(move || {
+            let result = run_cycle(backend, scope, uri, payload);
+            drop(key_provider);
+            result
+        })
+        .await
+        .map_err(|err| anyhow!("provider task panicked: {err}"))??;
 
         Ok(())
     }

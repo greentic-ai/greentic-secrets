@@ -8,8 +8,8 @@ export AZURE_KV_IMAGE
 export AZURE_KV_CERTS_DIR
 
 E2E_COMPOSE_FILE := scripts/compose.e2e.yml
-E2E_ENV_FILE ?= scripts/e2e.env
-E2E_ENV_FALLBACK := scripts/e2e.env.example
+E2E_ENV_FILE ?= .env
+E2E_ENV_FALLBACK := .env.example
 
 .PHONY: fmt lint build test run docker e2e-up e2e-seed e2e-test e2e-down e2e
 

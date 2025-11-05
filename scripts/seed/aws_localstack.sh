@@ -40,31 +40,7 @@ sys.exit(1)
 PY
 }
 
-ensure_aws_cli() {
-  if command -v aws >/dev/null 2>&1; then
-    return
-  fi
-
-  log "aws CLI not found; attempting installation via pip"
-  if ! command -v python3 >/dev/null 2>&1; then
-    log "python3 is required to install awscli automatically"
-    exit 1
-  fi
-
-  python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
-  python3 -m pip install --user --upgrade awscli >/dev/null
-
-  if ! command -v aws >/dev/null 2>&1; then
-    export PATH="${HOME}/.local/bin:${PATH}"
-    if ! command -v aws >/dev/null 2>&1; then
-      log "failed to install awscli via pip; please install it manually"
-      exit 1
-    fi
-  fi
-}
-
 require_python
-ensure_aws_cli
 
 AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://127.0.0.1:4566}"
 AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
@@ -74,19 +50,84 @@ export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
 export AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-test}"
 export AWS_PAGER=""
 
+select_aws_client() {
+  if command -v aws >/dev/null 2>&1; then
+    local aws_path
+    aws_path="$(command -v aws)"
+    if [[ -n "$aws_path" && -x "$aws_path" ]]; then
+      if "$aws_path" --version >/dev/null 2>&1; then
+        AWS_CMD=("$aws_path")
+        AWS_CMD_DESC="$aws_path"
+        return
+      fi
+      log "aws CLI at ${aws_path} is present but failed to execute; falling back to awslocal"
+    fi
+    log "aws CLI resolved to ${aws_path:-unknown} but is not executable; falling back to awslocal"
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    log "aws CLI not found and docker unavailable to exec awslocal"
+    exit 1
+  fi
+
+  if ! docker inspect greentic-localstack >/dev/null 2>&1; then
+    log "aws CLI not found and greentic-localstack container missing; ensure make e2e-up ran"
+    exit 1
+  fi
+
+  LOCALSTACK_CONTAINER="greentic-localstack"
+  AWS_CMD=(
+    docker exec
+    -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
+    -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+    -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN"
+    -e AWS_DEFAULT_REGION="$AWS_REGION"
+    -e AWS_REGION="$AWS_REGION"
+    "$LOCALSTACK_CONTAINER"
+    awslocal
+  )
+  AWS_CMD_DESC="docker exec ${LOCALSTACK_CONTAINER} awslocal"
+  log "aws CLI not found; using awslocal inside LocalStack container"
+}
+
+select_aws_client
+
 read -r AWS_HOST AWS_PORT < <(extract_host_port "$AWS_ENDPOINT_URL")
 log "waiting for LocalStack at ${AWS_HOST}:${AWS_PORT}"
-wait_for_port "$AWS_HOST" "$AWS_PORT"
+if ! wait_for_port "$AWS_HOST" "$AWS_PORT"; then
+  if [[ "${AWS_CMD[0]}" == "docker" && -n "${LOCALSTACK_CONTAINER:-}" ]]; then
+    if ! docker inspect "$LOCALSTACK_CONTAINER" >/dev/null 2>&1; then
+      log "LocalStack container ${LOCALSTACK_CONTAINER} not found; run 'make e2e-up' first."
+    elif [[ "$(docker inspect -f '{{.State.Running}}' "$LOCALSTACK_CONTAINER")" != "true" ]]; then
+      log "LocalStack container ${LOCALSTACK_CONTAINER} is not running; run 'make e2e-up' first."
+    else
+      log "LocalStack container ${LOCALSTACK_CONTAINER} is running but port ${AWS_PORT} is unreachable; check Docker port mapping."
+    fi
+  fi
+  exit 1
+fi
+
+run_aws() {
+  if [[ "${AWS_CMD[0]}" == "docker" ]]; then
+    "${AWS_CMD[@]}" "$@"
+  else
+    "${AWS_CMD[@]}" --endpoint-url "$AWS_ENDPOINT_URL" "$@"
+  fi
+}
 
 SECRET_NAME="${AWS_SEED_SECRET_NAME:-greentic/test/basic}"
 SECRET_PAYLOAD='{"api_key":"localstack-demo-key","region":"us-east-1-pr"}'
 SECRET_STAGE="${AWS_SEED_VERSION_STAGE:-pr-latest}"
 
-log "seeding secret ${SECRET_NAME} at ${AWS_ENDPOINT_URL}"
+if [[ -z "${AWS_CMD_DESC:-}" ]]; then
+  AWS_CMD_DESC="${AWS_CMD[*]}"
+fi
 
-if ! aws --endpoint-url "$AWS_ENDPOINT_URL" secretsmanager describe-secret --secret-id "$SECRET_NAME" >/dev/null 2>&1; then
+log "seeding secret ${SECRET_NAME} at ${AWS_ENDPOINT_URL} via ${AWS_CMD_DESC}"
+
+if ! run_aws secretsmanager describe-secret --secret-id "$SECRET_NAME" >/dev/null 2>&1; then
   log "secret missing; creating"
-  aws --endpoint-url "$AWS_ENDPOINT_URL" secretsmanager create-secret \
+  run_aws secretsmanager create-secret \
     --name "$SECRET_NAME" \
     --secret-string "$SECRET_PAYLOAD" \
     --tags Key=seeded-by,Value=greentic-pr \
@@ -95,7 +136,7 @@ else
   log "secret already exists"
 fi
 
-current_payload="$(aws --endpoint-url "$AWS_ENDPOINT_URL" secretsmanager get-secret-value \
+current_payload="$(run_aws secretsmanager get-secret-value \
   --secret-id "$SECRET_NAME" \
   --query SecretString \
   --output text 2>/dev/null || true)"
@@ -106,7 +147,7 @@ if [[ "$current_payload" == "$SECRET_PAYLOAD" ]]; then
 fi
 
 log "upserting secret value and stamping version stage ${SECRET_STAGE}"
-aws --endpoint-url "$AWS_ENDPOINT_URL" secretsmanager put-secret-value \
+run_aws secretsmanager put-secret-value \
   --secret-id "$SECRET_NAME" \
   --secret-string "$SECRET_PAYLOAD" \
   --version-stages "$SECRET_STAGE" \

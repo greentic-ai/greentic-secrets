@@ -5,7 +5,9 @@
 //! the configured Key Vault key. Authentication uses the OAuth2 client
 //! credentials flow with values supplied through environment variables.
 
-use anyhow::{Context, Result};
+mod auth;
+
+use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use greentic_secrets_spec::{
     KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
@@ -17,15 +19,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::env;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
+
+use auth::{AuthError, KvAuthConfig, request_access_token};
 
 const SECRETS_API_VERSION: &str = "7.4";
 const KEYS_API_VERSION: &str = "7.4";
-const TOKEN_SCOPE: &str = "https://vault.azure.net/.default";
 const DEFAULT_PREFIX: &str = "greentic";
 const TEAM_PLACEHOLDER: &str = "_";
 const DEFAULT_TIMEOUT_SECS: u64 = 15;
+
+struct ClientHolder {
+    client: &'static Client,
+    insecure: bool,
+}
+
+static AZURE_HTTP_CLIENT: OnceLock<ClientHolder> = OnceLock::new();
 
 /// Components returned to the broker wiring.
 pub struct BackendComponents {
@@ -36,11 +47,19 @@ pub struct BackendComponents {
 /// Construct the Azure Key Vault backend using environment configuration.
 pub async fn build_backend() -> Result<BackendComponents> {
     let config = Arc::new(AzureProviderConfig::from_env()?);
-    let client = Client::builder()
-        .timeout(config.http_timeout)
-        .build()
-        .context("failed to build reqwest client for azure provider")?;
-    let auth = Arc::new(AzureAuth::new(&config, client.clone()));
+
+    let timeout = config.http_timeout;
+    let insecure = config.tls_insecure_skip_verify;
+    let config_for_block = config.clone();
+
+    let (client, auth) =
+        tokio::task::spawn_blocking(move || -> Result<(Client, Arc<AzureAuth>)> {
+            let client_ref = shared_blocking_client(timeout, insecure)?;
+            let auth = Arc::new(AzureAuth::new(&config_for_block));
+            Ok((client_ref.clone(), auth))
+        })
+        .await
+        .map_err(|err| anyhow!("failed to initialise azure provider: {err}"))??;
 
     let backend = AzureSecretsBackend::new(config.clone(), client.clone(), auth.clone());
     let key_provider = AzureKmsKeyProvider::new(config, client, auth);
@@ -55,27 +74,105 @@ pub async fn build_backend() -> Result<BackendComponents> {
 struct AzureProviderConfig {
     vault_uri: String,
     secret_prefix: String,
-    tenant_id: String,
-    client_id: String,
-    client_secret: String,
     key_name: String,
     key_algorithm: String,
     http_timeout: Duration,
+    auth_mode: AzureAuthMode,
+    tls_insecure_skip_verify: bool,
+}
+
+#[derive(Clone)]
+enum AzureAuthMode {
+    ClientCredentials { config: KvAuthConfig },
+    StaticToken { bearer: String },
+}
+
+fn uri_uses_loopback_host(uri: &str) -> bool {
+    let lower = uri.to_ascii_lowercase();
+    lower.contains("127.0.0.1")
+        || lower.contains("localhost")
+        || lower.contains("[::1]")
+        || lower.contains("::1")
+}
+
+fn shared_blocking_client(timeout: Duration, insecure: bool) -> Result<&'static Client> {
+    if let Some(holder) = AZURE_HTTP_CLIENT.get() {
+        if holder.insecure == insecure {
+            return Ok(holder.client);
+        } else {
+            bail!(
+                "azure http client already initialised with different TLS settings; restart process to change verification mode"
+            );
+        }
+    }
+
+    let builder_timeout = timeout;
+    let builder_insecure = insecure;
+    let client = thread::spawn(move || {
+        Client::builder()
+            .timeout(builder_timeout)
+            .danger_accept_invalid_certs(builder_insecure)
+            .danger_accept_invalid_hostnames(builder_insecure)
+            .build()
+    })
+    .join()
+    .map_err(|_| anyhow::anyhow!("azure http client builder thread panicked"))?
+    .context("failed to build reqwest client for azure provider")?;
+
+    let leaked = Box::leak(Box::new(client));
+    let holder = ClientHolder {
+        client: leaked,
+        insecure,
+    };
+    let _ = AZURE_HTTP_CLIENT.set(holder);
+
+    let stored = AZURE_HTTP_CLIENT
+        .get()
+        .expect("azure http client should be initialised");
+
+    if stored.insecure != insecure {
+        bail!(
+            "azure http client initialised with different TLS settings; restart process to change verification mode"
+        );
+    }
+
+    Ok(stored.client)
 }
 
 impl AzureProviderConfig {
     fn from_env() -> Result<Self> {
-        let vault_uri = env::var("GREENTIC_AZURE_VAULT_URI")
-            .context("set GREENTIC_AZURE_VAULT_URI with your Key Vault URI")?;
-        let tenant_id = env::var("AZURE_TENANT_ID")
-            .or_else(|_| env::var("GREENTIC_AZURE_TENANT_ID"))
-            .context("set AZURE_TENANT_ID (or GREENTIC_AZURE_TENANT_ID) for the OAuth flow")?;
-        let client_id = env::var("AZURE_CLIENT_ID")
-            .or_else(|_| env::var("GREENTIC_AZURE_CLIENT_ID"))
-            .context("set AZURE_CLIENT_ID (or GREENTIC_AZURE_CLIENT_ID)")?;
-        let client_secret = env::var("AZURE_CLIENT_SECRET")
-            .or_else(|_| env::var("GREENTIC_AZURE_CLIENT_SECRET"))
-            .context("set AZURE_CLIENT_SECRET (or GREENTIC_AZURE_CLIENT_SECRET)")?;
+        let vault_uri = env::var("AZURE_KEYVAULT_URL")
+            .or_else(|_| env::var("AZURE_KEYVAULT_URI"))
+            .or_else(|_| env::var("GREENTIC_AZURE_VAULT_URI"))
+            .context(
+                "set AZURE_KEYVAULT_URL (or AZURE_KEYVAULT_URI / GREENTIC_AZURE_VAULT_URI) with your Key Vault URL",
+            )?;
+        let mut static_token = env::var("GREENTIC_AZURE_BEARER_TOKEN")
+            .or_else(|_| env::var("AZURE_KEYVAULT_BEARER_TOKEN"))
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        if static_token.is_none() && uri_uses_loopback_host(&vault_uri) {
+            static_token = Some("emulator".to_string());
+        }
+
+        let tls_insecure_skip_verify = env::var("AZURE_KEYVAULT_INSECURE_SKIP_VERIFY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "True"))
+            .unwrap_or_else(|| uri_uses_loopback_host(&vault_uri));
+
+        let auth_mode = if let Some(token) = static_token {
+            AzureAuthMode::StaticToken { bearer: token }
+        } else {
+            let config = KvAuthConfig::from_env().context(
+                "set AZURE_TENANT_ID, AZURE_CLIENT_ID, and AZURE_CLIENT_SECRET to enable Azure Key Vault authentication",
+            )?;
+            AzureAuthMode::ClientCredentials { config }
+        };
+
         let key_name = env::var("GREENTIC_AZURE_KEY_NAME")
             .context("set GREENTIC_AZURE_KEY_NAME with the Key Vault key to wrap DEKs")?;
 
@@ -104,12 +201,11 @@ impl AzureProviderConfig {
         Ok(Self {
             vault_uri: vault_uri.trim_end_matches('/').to_string(),
             secret_prefix,
-            tenant_id,
-            client_id,
-            client_secret,
             key_name,
             key_algorithm,
             http_timeout: timeout,
+            auth_mode,
+            tls_insecure_skip_verify,
         })
     }
 
@@ -176,147 +272,176 @@ impl AzureSecretsBackend {
         truncated
     }
 
-    fn request(
-        &self,
-        method: Method,
-        url: String,
-        body: Option<Value>,
-    ) -> SecretsResult<reqwest::blocking::Response> {
-        let token = self.auth.bearer_token()?;
-        let builder = match method {
-            Method::GET => self.client.get(url),
-            Method::POST => self.client.post(url),
-            Method::PUT => self.client.put(url),
-            Method::DELETE => self.client.delete(url),
-            other => self.client.request(other, url),
-        };
+    fn invoke<T, F>(&self, task: F) -> SecretsResult<T>
+    where
+        T: Send + 'static,
+        F: Send
+            + 'static
+            + FnOnce(Client, Arc<AzureAuth>, Arc<AzureProviderConfig>) -> SecretsResult<T>,
+    {
+        let client = self.client.clone();
+        let auth = self.auth.clone();
+        let config = self.config.clone();
 
-        let builder = builder.header("Authorization", token);
-        let builder = if let Some(payload) = body {
-            builder.json(&payload)
-        } else {
-            builder
-        };
-
-        builder
-            .send()
-            .map_err(|err| SecretsError::Storage(format!("azure request failed: {err}")))
+        match thread::spawn(move || task(client, auth, config)).join() {
+            Ok(result) => result,
+            Err(cause) => {
+                let message = if let Some(text) = cause.downcast_ref::<&str>() {
+                    *text
+                } else if let Some(text) = cause.downcast_ref::<String>() {
+                    text.as_str()
+                } else {
+                    "azure worker thread panicked"
+                };
+                Err(SecretsError::Backend(message.into()))
+            }
+        }
     }
 
     fn set_secret(&self, name: &str, payload: &StoredSecret) -> SecretsResult<()> {
-        let url = format!(
-            "{}/{}?api-version={}",
-            self.config.secrets_endpoint(),
-            name,
-            SECRETS_API_VERSION
-        );
-        let encoded = encode_secret(payload)?;
-        let body = json!({ "value": STANDARD.encode(encoded) });
+        let secret = name.to_owned();
+        let stored = payload.clone();
+        self.invoke(move |client, auth, config| {
+            let url = format!(
+                "{}/{}?api-version={}",
+                config.secrets_endpoint(),
+                secret,
+                SECRETS_API_VERSION
+            );
+            let encoded = encode_secret(&stored)?;
+            let body = json!({ "value": STANDARD.encode(encoded) });
 
-        let response = self.request(Method::PUT, url, Some(body))?;
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().unwrap_or_default();
-            return Err(SecretsError::Storage(format!(
-                "set secret failed: {status} {text}"
-            )));
-        }
-        Ok(())
+            let response = blocking_request(
+                &client,
+                &auth,
+                config.as_ref(),
+                Method::PUT,
+                url,
+                Some(body),
+            )?;
+            let status = response.status();
+            if !status.is_success() {
+                let text = response.text().unwrap_or_default();
+                return Err(SecretsError::Storage(format!(
+                    "set secret failed: {status} {text}"
+                )));
+            }
+            Ok(())
+        })
     }
 
     fn get_latest(&self, name: &str) -> SecretsResult<Option<StoredSecret>> {
-        let url = format!(
-            "{}/{}?api-version={}",
-            self.config.secrets_endpoint(),
-            name,
-            SECRETS_API_VERSION
-        );
-        let response = self.request(Method::GET, url, None)?;
-        match response.status() {
-            StatusCode::NOT_FOUND => Ok(None),
-            status if status.is_success() => {
-                let body = response.text().unwrap_or_default();
-                parse_secret_bundle(&body)
-            }
-            status => {
-                let text = response.text().unwrap_or_default();
-                Err(SecretsError::Storage(format!(
-                    "get secret failed: {status} {text}"
-                )))
-            }
-        }
-    }
-
-    fn get_version(&self, name: &str, version_id: &str) -> SecretsResult<Option<StoredSecret>> {
-        let url = format!(
-            "{}/{}/{}?api-version={}",
-            self.config.secrets_endpoint(),
-            name,
-            version_id,
-            SECRETS_API_VERSION
-        );
-        let response = self.request(Method::GET, url, None)?;
-        match response.status() {
-            StatusCode::NOT_FOUND => Ok(None),
-            status if status.is_success() => {
-                let body = response.text().unwrap_or_default();
-                parse_secret_bundle(&body)
-            }
-            status => {
-                let text = response.text().unwrap_or_default();
-                Err(SecretsError::Storage(format!(
-                    "get secret version failed: {status} {text}"
-                )))
-            }
-        }
-    }
-
-    fn list_version_ids(&self, name: &str) -> SecretsResult<Vec<String>> {
-        let mut url = format!(
-            "{}/{}/versions?api-version={}",
-            self.config.secrets_endpoint(),
-            name,
-            SECRETS_API_VERSION
-        );
-        let mut collected = Vec::new();
-
-        loop {
-            let response = self.request(Method::GET, url.clone(), None)?;
+        let secret = name.to_owned();
+        self.invoke(move |client, auth, config| {
+            let url = format!(
+                "{}/{}?api-version={}",
+                config.secrets_endpoint(),
+                secret,
+                SECRETS_API_VERSION
+            );
+            let response =
+                blocking_request(&client, &auth, config.as_ref(), Method::GET, url, None)?;
             match response.status() {
-                StatusCode::NOT_FOUND => return Ok(Vec::new()),
+                StatusCode::NOT_FOUND => Ok(None),
                 status if status.is_success() => {
                     let body = response.text().unwrap_or_default();
-                    let parsed: SecretVersionListResponse =
-                        serde_json::from_str(&body).map_err(|err| {
-                            SecretsError::Storage(format!(
-                                "failed to parse secret versions list: {err}; body={body}"
-                            ))
-                        })?;
-
-                    if let Some(entries) = parsed.value {
-                        for entry in entries {
-                            if let Some(id) = extract_version_segment(&entry.id) {
-                                collected.push(id.to_string());
-                            }
-                        }
-                    }
-
-                    if let Some(next) = parsed.next_link {
-                        url = next;
-                        continue;
-                    }
-                    break;
+                    parse_secret_bundle(&body)
                 }
                 status => {
                     let text = response.text().unwrap_or_default();
-                    return Err(SecretsError::Storage(format!(
-                        "list secret versions failed: {status} {text}"
-                    )));
+                    Err(SecretsError::Storage(format!(
+                        "get secret failed: {status} {text}"
+                    )))
                 }
             }
-        }
+        })
+    }
 
-        Ok(collected)
+    fn get_version(&self, name: &str, version_id: &str) -> SecretsResult<Option<StoredSecret>> {
+        let secret = name.to_owned();
+        let version = version_id.to_owned();
+        self.invoke(move |client, auth, config| {
+            let url = format!(
+                "{}/{}/{}?api-version={}",
+                config.secrets_endpoint(),
+                secret,
+                version,
+                SECRETS_API_VERSION
+            );
+            let response =
+                blocking_request(&client, &auth, config.as_ref(), Method::GET, url, None)?;
+            match response.status() {
+                StatusCode::NOT_FOUND => Ok(None),
+                status if status.is_success() => {
+                    let body = response.text().unwrap_or_default();
+                    parse_secret_bundle(&body)
+                }
+                status => {
+                    let text = response.text().unwrap_or_default();
+                    Err(SecretsError::Storage(format!(
+                        "get secret version failed: {status} {text}"
+                    )))
+                }
+            }
+        })
+    }
+
+    fn list_version_ids(&self, name: &str) -> SecretsResult<Vec<String>> {
+        let secret = name.to_owned();
+        self.invoke(move |client, auth, config| {
+            let mut url = format!(
+                "{}/{}/versions?api-version={}",
+                config.secrets_endpoint(),
+                secret,
+                SECRETS_API_VERSION
+            );
+            let mut collected = Vec::new();
+
+            loop {
+                let response = blocking_request(
+                    &client,
+                    &auth,
+                    config.as_ref(),
+                    Method::GET,
+                    url.clone(),
+                    None,
+                )?;
+                match response.status() {
+                    StatusCode::NOT_FOUND => return Ok(Vec::new()),
+                    status if status.is_success() => {
+                        let body = response.text().unwrap_or_default();
+                        let parsed: SecretVersionListResponse = serde_json::from_str(&body)
+                            .map_err(|err| {
+                                SecretsError::Storage(format!(
+                                    "failed to parse secret versions list: {err}; body={body}"
+                                ))
+                            })?;
+
+                        if let Some(entries) = parsed.value {
+                            for entry in entries {
+                                if let Some(id) = extract_version_segment(&entry.id) {
+                                    collected.push(id.to_string());
+                                }
+                            }
+                        }
+
+                        if let Some(next) = parsed.next_link {
+                            url = next;
+                            continue;
+                        }
+                        break;
+                    }
+                    status => {
+                        let text = response.text().unwrap_or_default();
+                        return Err(SecretsError::Storage(format!(
+                            "list secret versions failed: {status} {text}"
+                        )));
+                    }
+                }
+            }
+
+            Ok(collected)
+        })
     }
 
     fn load_all_versions(&self, name: &str) -> SecretsResult<Vec<StoredSecret>> {
@@ -374,89 +499,96 @@ impl SecretsBackend for AzureSecretsBackend {
         category_prefix: Option<&str>,
         name_prefix: Option<&str>,
     ) -> SecretsResult<Vec<SecretListItem>> {
-        let mut items = Vec::new();
-        let mut url = format!(
-            "{}?api-version={}",
-            self.config.secrets_endpoint(),
-            SECRETS_API_VERSION
-        );
+        let scope = scope.clone();
+        let category_prefix = category_prefix.map(|s| s.to_string());
+        let name_prefix = name_prefix.map(|s| s.to_string());
 
-        loop {
-            let token = self.auth.bearer_token()?;
-            let response = self
-                .client
-                .get(&url)
-                .header("Authorization", token)
-                .send()
-                .map_err(|err| {
-                    SecretsError::Storage(format!("list secrets request failed: {err}"))
+        self.invoke(move |client, auth, config| {
+            let mut items = Vec::new();
+            let mut url = format!(
+                "{}?api-version={}",
+                config.secrets_endpoint(),
+                SECRETS_API_VERSION
+            );
+
+            loop {
+                let response = blocking_request(
+                    &client,
+                    &auth,
+                    config.as_ref(),
+                    Method::GET,
+                    url.clone(),
+                    None,
+                )?;
+                let status = response.status();
+                let body = response.text().unwrap_or_default();
+                if !status.is_success() {
+                    return Err(SecretsError::Storage(format!(
+                        "list secrets failed: {status} {body}"
+                    )));
+                }
+
+                let parsed: SecretListResponse = serde_json::from_str(&body).map_err(|err| {
+                    SecretsError::Storage(format!(
+                        "failed to decode list secrets response: {err}; body={body}"
+                    ))
                 })?;
 
-            let status = response.status();
-            let body = response.text().unwrap_or_default();
-            if !status.is_success() {
-                return Err(SecretsError::Storage(format!(
-                    "list secrets failed: {status} {body}"
-                )));
-            }
+                if let Some(secrets) = parsed.value {
+                    for entry in secrets {
+                        let Some(secret_name) = extract_secret_name(&entry.id) else {
+                            continue;
+                        };
 
-            let parsed: SecretListResponse = serde_json::from_str(&body).map_err(|err| {
-                SecretsError::Storage(format!(
-                    "failed to decode list secrets response: {err}; body={body}"
-                ))
-            })?;
-
-            if let Some(secrets) = parsed.value {
-                for entry in secrets {
-                    let Some(secret_name) = extract_secret_name(&entry.id) else {
-                        continue;
-                    };
-
-                    if !secret_name.starts_with(&self.config.secret_prefix) {
-                        continue;
-                    }
-
-                    if let Some(stored) = self.get_latest(secret_name)? {
-                        if stored.deleted {
+                        if !secret_name.starts_with(&config.secret_prefix) {
                             continue;
                         }
-                        if let Some(record) = stored.record {
-                            if record.meta.scope().env() != scope.env()
-                                || record.meta.scope().tenant() != scope.tenant()
-                            {
+
+                        if let Some(stored) =
+                            blocking_get_latest(&client, &auth, config.as_ref(), secret_name)?
+                        {
+                            if stored.deleted {
                                 continue;
                             }
-                            if scope.team().is_some() && record.meta.scope().team() != scope.team()
-                            {
-                                continue;
-                            }
-                            if let Some(prefix) = category_prefix {
-                                if !record.meta.uri.category().starts_with(prefix) {
+                            if let Some(record) = stored.record {
+                                if record.meta.scope().env() != scope.env()
+                                    || record.meta.scope().tenant() != scope.tenant()
+                                {
                                     continue;
                                 }
-                            }
-                            if let Some(prefix) = name_prefix {
-                                if !record.meta.uri.name().starts_with(prefix) {
+                                if scope.team().is_some()
+                                    && record.meta.scope().team() != scope.team()
+                                {
                                     continue;
                                 }
+                                if let Some(prefix) = category_prefix.as_deref() {
+                                    if !record.meta.uri.category().starts_with(prefix) {
+                                        continue;
+                                    }
+                                }
+                                if let Some(prefix) = name_prefix.as_deref() {
+                                    if !record.meta.uri.name().starts_with(prefix) {
+                                        continue;
+                                    }
+                                }
+                                items.push(SecretListItem::from_meta(
+                                    &record.meta,
+                                    Some(stored.version.to_string()),
+                                ));
                             }
-                            items.push(SecretListItem::from_meta(
-                                &record.meta,
-                                Some(stored.version.to_string()),
-                            ));
                         }
                     }
                 }
+
+                if let Some(next) = parsed.next_link {
+                    url = next;
+                    continue;
+                }
+                break;
             }
 
-            if let Some(next) = parsed.next_link {
-                url = next;
-                continue;
-            }
-            break;
-        }
-
-        Ok(items)
+            Ok(items)
+        })
     }
 
     fn delete(&self, uri: &SecretUri) -> SecretsResult<SecretVersion> {
@@ -503,86 +635,101 @@ impl SecretsBackend for AzureSecretsBackend {
 }
 
 struct AzureAuth {
-    token_url: String,
-    client_id: String,
-    client_secret: String,
-    client: Client,
     cache: Mutex<Option<TokenCache>>,
+    token_http: reqwest::blocking::Client,
+    strategy: AzureAuthStrategy,
+}
+
+#[derive(Clone)]
+enum AzureAuthStrategy {
+    ClientCredentials { config: KvAuthConfig },
+    StaticToken { header: String },
 }
 
 impl AzureAuth {
-    fn new(config: &AzureProviderConfig, client: Client) -> Self {
+    fn new(config: &AzureProviderConfig) -> Self {
+        let strategy = match &config.auth_mode {
+            AzureAuthMode::ClientCredentials { config } => {
+                tracing::info!(
+                    "azure credential: ClientSecretCredential (tenant_id={}, scope={})",
+                    config.tenant_id,
+                    config.scope
+                );
+                AzureAuthStrategy::ClientCredentials {
+                    config: config.clone(),
+                }
+            }
+            AzureAuthMode::StaticToken { bearer } => {
+                tracing::info!("azure credential: static bearer token");
+                let trimmed = bearer.trim();
+                let header = if trimmed.to_ascii_lowercase().starts_with("bearer ") {
+                    trimmed.to_string()
+                } else {
+                    format!("Bearer {trimmed}")
+                };
+                AzureAuthStrategy::StaticToken { header }
+            }
+        };
+
+        let token_http = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .build()
+            .expect("azure token client build must succeed");
+
         Self {
-            token_url: format!(
-                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-                config.tenant_id
-            ),
-            client_id: config.client_id.clone(),
-            client_secret: config.client_secret.clone(),
-            client,
             cache: Mutex::new(None),
+            token_http,
+            strategy,
         }
     }
 
     fn bearer_token(&self) -> SecretsResult<String> {
-        let mut guard = self.cache.lock().unwrap();
-        if let Some(cache) = guard.as_ref() {
-            if Instant::now() < cache.expires_at {
-                return Ok(format!("Bearer {token}", token = cache.token));
+        match &self.strategy {
+            AzureAuthStrategy::StaticToken { header } => Ok(header.clone()),
+            AzureAuthStrategy::ClientCredentials { config } => {
+                let mut guard = self.cache.lock().unwrap();
+                if let Some(cache) = guard.as_ref() {
+                    if Instant::now() < cache.expires_at {
+                        return Ok(format!("Bearer {}", cache.token));
+                    }
+                }
+
+                let token = match request_access_token(&self.token_http, config) {
+                    Ok(token) => token,
+                    Err(AuthError::Unauthorized { status, body }) => {
+                        return Err(SecretsError::Backend(format!(
+                            "Azure AAD rejected client credentials ({status}). body={body}"
+                        )));
+                    }
+                    Err(err) => {
+                        return Err(SecretsError::Backend(format!(
+                            "failed to request azure token: {err}"
+                        )));
+                    }
+                };
+
+                let cache_entry = TokenCache {
+                    token: token.token.clone(),
+                    expires_at: Instant::now() + token.expires_in,
+                };
+                let token_string = format!("Bearer {}", cache_entry.token);
+                *guard = Some(cache_entry);
+                Ok(token_string)
             }
         }
+    }
 
-        let params = [
-            ("grant_type", "client_credentials"),
-            ("client_id", self.client_id.as_str()),
-            ("client_secret", self.client_secret.as_str()),
-            ("scope", TOKEN_SCOPE),
-        ];
-
-        let response = self
-            .client
-            .post(&self.token_url)
-            .form(&params)
-            .send()
-            .map_err(|err| {
-                SecretsError::Backend(format!("failed to request azure token: {err}"))
-            })?;
-
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        if !status.is_success() {
-            return Err(SecretsError::Backend(format!(
-                "token request failed: {status} {body}"
-            )));
+    fn scope_hint(&self) -> Option<&str> {
+        match &self.strategy {
+            AzureAuthStrategy::ClientCredentials { config } => Some(config.scope.as_str()),
+            AzureAuthStrategy::StaticToken { .. } => None,
         }
-
-        let parsed: TokenResponse = serde_json::from_str(&body).map_err(|err| {
-            SecretsError::Backend(format!(
-                "failed to parse token response: {err}; body={body}"
-            ))
-        })?;
-
-        let expires_in = parsed.expires_in.unwrap_or(3600);
-        let cache_entry = TokenCache {
-            token: parsed.access_token,
-            expires_at: Instant::now() + Duration::from_secs(expires_in.saturating_sub(60)),
-        };
-        let token_string = format!("Bearer {token}", token = cache_entry.token);
-        *guard = Some(cache_entry);
-        Ok(token_string)
     }
 }
 
 struct TokenCache {
     token: String,
     expires_at: Instant,
-}
-
-#[derive(Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    #[serde(default)]
-    expires_in: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -601,33 +748,64 @@ impl AzureKmsKeyProvider {
         }
     }
 
-    fn key_operation(&self, operation: &str, body: Value) -> SecretsResult<Value> {
-        let url = format!(
-            "{}/{}/{}?api-version={}",
-            self.config.keys_endpoint(),
-            self.config.key_name,
-            operation,
-            KEYS_API_VERSION
-        );
+    fn invoke<T, F>(&self, task: F) -> SecretsResult<T>
+    where
+        T: Send + 'static,
+        F: Send
+            + 'static
+            + FnOnce(Client, Arc<AzureAuth>, Arc<AzureProviderConfig>) -> SecretsResult<T>,
+    {
+        let client = self.client.clone();
+        let auth = self.auth.clone();
+        let config = self.config.clone();
 
-        let response = self
-            .client
-            .post(url)
-            .header("Authorization", self.auth.bearer_token()?)
-            .json(&body)
-            .send()
-            .map_err(|err| SecretsError::Backend(format!("azure key request failed: {err}")))?;
-
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        if !status.is_success() {
-            return Err(SecretsError::Backend(format!(
-                "key operation failed: {status} {body}"
-            )));
+        match thread::spawn(move || task(client, auth, config)).join() {
+            Ok(result) => result,
+            Err(cause) => {
+                let message = if let Some(text) = cause.downcast_ref::<&str>() {
+                    *text
+                } else if let Some(text) = cause.downcast_ref::<String>() {
+                    text.as_str()
+                } else {
+                    "azure key worker thread panicked"
+                };
+                Err(SecretsError::Backend(message.into()))
+            }
         }
+    }
 
-        serde_json::from_str(&body).map_err(|err| {
-            SecretsError::Backend(format!("failed to parse key response: {err}; body={body}"))
+    fn key_operation(&self, operation: &str, body: Value) -> SecretsResult<Value> {
+        let operation = operation.to_owned();
+        self.invoke(move |client, auth, config| {
+            let url = format!(
+                "{}/{}/{}?api-version={}",
+                config.keys_endpoint(),
+                config.key_name,
+                operation,
+                KEYS_API_VERSION
+            );
+
+            let response = blocking_request(
+                &client,
+                &auth,
+                config.as_ref(),
+                Method::POST,
+                url,
+                Some(body),
+            )?;
+            let status = response.status();
+            let payload = response.text().unwrap_or_default();
+            if !status.is_success() {
+                return Err(SecretsError::Backend(format!(
+                    "key operation failed: {status} {payload}"
+                )));
+            }
+
+            serde_json::from_str(&payload).map_err(|err| {
+                SecretsError::Backend(format!(
+                    "failed to parse key response: {err}; body={payload}"
+                ))
+            })
         })
     }
 }
@@ -701,6 +879,86 @@ impl StoredSecret {
 fn encode_secret(payload: &StoredSecret) -> SecretsResult<Vec<u8>> {
     serde_json::to_vec(payload)
         .map_err(|err| SecretsError::Storage(format!("failed to encode secret payload: {err}")))
+}
+
+fn blocking_request(
+    client: &Client,
+    auth: &AzureAuth,
+    config: &AzureProviderConfig,
+    method: Method,
+    url: String,
+    body: Option<Value>,
+) -> SecretsResult<reqwest::blocking::Response> {
+    let token = auth.bearer_token()?;
+    let builder = match method {
+        Method::GET => client.get(url),
+        Method::POST => client.post(url),
+        Method::PUT => client.put(url),
+        Method::DELETE => client.delete(url),
+        other => client.request(other, url),
+    };
+
+    let builder = builder.header("Authorization", token);
+    let builder = if config.tls_insecure_skip_verify {
+        builder
+            .header("x-ms-keyvault-region", "local")
+            .header("x-ms-keyvault-service-version", "1.6.0.0")
+    } else {
+        builder
+    };
+    let builder = if let Some(payload) = body {
+        builder.json(&payload)
+    } else {
+        builder
+    };
+
+    let response = builder
+        .send()
+        .map_err(|err| SecretsError::Storage(format!("azure request failed: {err}")))?;
+
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let body = response.text().unwrap_or_default();
+        let scope_hint = auth.scope_hint().unwrap_or("unknown");
+        let mut hint = format!(
+            "Azure Key Vault returned 401 Unauthorized. Hint: ensure AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, and AZURE_KEYVAULT_URL are configured. Scope used: {scope_hint}. Key Vault URL: {}.",
+            config.vault_uri
+        );
+        hint.push_str(" Verify credentials with: az account get-access-token --scope ");
+        hint.push_str(scope_hint);
+        hint.push_str(". Response body: ");
+        hint.push_str(&body);
+        return Err(SecretsError::Backend(hint));
+    }
+
+    Ok(response)
+}
+
+fn blocking_get_latest(
+    client: &Client,
+    auth: &AzureAuth,
+    config: &AzureProviderConfig,
+    name: &str,
+) -> SecretsResult<Option<StoredSecret>> {
+    let url = format!(
+        "{}/{}?api-version={}",
+        config.secrets_endpoint(),
+        name,
+        SECRETS_API_VERSION
+    );
+    let response = blocking_request(client, auth, config, Method::GET, url, None)?;
+    match response.status() {
+        StatusCode::NOT_FOUND => Ok(None),
+        status if status.is_success() => {
+            let body = response.text().unwrap_or_default();
+            parse_secret_bundle(&body)
+        }
+        status => {
+            let text = response.text().unwrap_or_default();
+            Err(SecretsError::Storage(format!(
+                "get secret failed: {status} {text}"
+            )))
+        }
+    }
 }
 
 fn parse_secret_bundle(body: &str) -> SecretsResult<Option<StoredSecret>> {

@@ -14,7 +14,7 @@ require_python() {
 
 require_python
 
-BASE_URL="${AZURE_KEYVAULT_URI:-https://127.0.0.1:8080}"
+BASE_URL="${AZURE_KEYVAULT_URL:-${AZURE_KEYVAULT_URI:-https://127.0.0.1:8080}}"
 API_VERSION="${AZURE_KEYVAULT_API_VERSION:-7.4}"
 
 IS_HTTPS="$(AZURE_URL="$BASE_URL" python3 - <<'PY'
