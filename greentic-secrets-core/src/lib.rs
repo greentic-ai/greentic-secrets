@@ -5,6 +5,7 @@ pub mod broker;
 pub mod crypto;
 pub mod embedded;
 pub mod errors;
+pub mod http;
 #[cfg(feature = "imds")]
 pub mod imds;
 pub mod key_provider;
@@ -12,6 +13,7 @@ pub mod policy;
 pub mod probe;
 pub mod provider;
 pub mod resolver;
+pub mod rt;
 pub mod spec;
 pub mod spec_compat;
 pub mod spec_registry;

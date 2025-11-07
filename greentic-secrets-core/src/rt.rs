@@ -4,13 +4,13 @@ use tokio::runtime::{self, Handle};
 static RUNTIME: Lazy<runtime::Runtime> = Lazy::new(|| {
     runtime::Builder::new_multi_thread()
         .enable_all()
-        .thread_name("vault-kv-rt")
+        .thread_name("greentic-secrets-rt")
         .build()
-        .expect("build vault-kv runtime")
+        .expect("build greentic-secrets runtime")
 });
 
-/// Run the provided future to completion regardless of the current context.
-pub fn block_on<F>(fut: F) -> F::Output
+/// Run a future to completion from synchronous code without nesting runtimes.
+pub fn sync_await<F>(fut: F) -> F::Output
 where
     F: std::future::Future,
 {

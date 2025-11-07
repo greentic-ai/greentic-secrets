@@ -22,8 +22,8 @@ k8s = []
 aws = ["imds"]
 gcp = []
 azure = []
-imds = ["dep:reqwest"]
-nats = ["dep:async-nats", "dep:futures", "tokio"]
+imds = []
+nats = ["dep:async-nats", "dep:futures"]
 schema = ["schemars", "greentic_secrets_spec/schema"]
 
 xchacha = []
@@ -38,21 +38,21 @@ hkdf = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 lru = { workspace = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 async-nats = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
-reqwest = { workspace = true, default-features = false, features = ["rustls-tls"], optional = true }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
 tracing = { workspace = true }
 greentic_secrets_api = { workspace = true }
 greentic_secrets_spec = { workspace = true }
 ring = { workspace = true, optional = true }
+once_cell = { workspace = true }
+anyhow = { workspace = true }
+url = { workspace = true }
 
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "time"] }
 tempfile = { workspace = true }
-anyhow = { workspace = true }
-once_cell = { workspace = true }
 wit-bindgen = { workspace = true }
 greentic-types = { workspace = true }
 

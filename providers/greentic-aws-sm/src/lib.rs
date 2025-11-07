@@ -6,6 +6,7 @@ use aws_sdk_secretsmanager::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_secretsmanager::operation::list_secret_version_ids::ListSecretVersionIdsError;
 use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType};
 use aws_types::region::Region;
+use greentic_secrets_core::rt;
 use greentic_secrets_spec::{
     KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
     SecretsError, SecretsResult, VersionedSecret,
@@ -13,9 +14,6 @@ use greentic_secrets_spec::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::sync::{Arc, OnceLock};
-use tokio::runtime::Runtime;
-use tokio::task;
 
 const DEFAULT_PREFIX: &str = "gtsec";
 const DEFAULT_STAGE: &str = "AWSCURRENT";
@@ -24,42 +22,8 @@ const STAGE_ENV: &str = "GREENTIC_AWS_VERSION_STAGE";
 const KMS_KEY_ENV: &str = "GREENTIC_AWS_KMS_KEY_ID";
 const REGION_ENV: &str = "GREENTIC_AWS_REGION";
 const TEAM_PLACEHOLDER: &str = "_";
-
-static AWS_RUNTIME: OnceLock<&'static Runtime> = OnceLock::new();
-
-struct ManagedRuntime {
-    inner: &'static Runtime,
-}
-
-impl ManagedRuntime {
-    fn new() -> Result<Self> {
-        if let Some(existing) = AWS_RUNTIME.get() {
-            return Ok(Self { inner: existing });
-        }
-
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .context("failed to create tokio runtime for aws backend")?;
-
-        let leaked = Box::leak(Box::new(runtime));
-        let _ = AWS_RUNTIME.set(leaked);
-        let inner = *AWS_RUNTIME
-            .get()
-            .expect("aws runtime should be initialised");
-
-        Ok(Self { inner })
-    }
-
-    fn block_on<F, T>(&self, fut: F) -> T
-    where
-        F: std::future::Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
-        self.inner.block_on(fut)
-    }
-}
+const SM_ENDPOINT_ENV: &str = "GREENTIC_AWS_SM_ENDPOINT";
+const KMS_ENDPOINT_ENV: &str = "GREENTIC_AWS_KMS_ENDPOINT";
 
 /// Components returned for integration with the broker/core wiring.
 pub struct BackendComponents {
@@ -71,13 +35,24 @@ pub struct BackendComponents {
 pub async fn build_backend() -> Result<BackendComponents> {
     let (config, shared_config) = AwsProviderConfig::load_from_env().await?;
 
-    let runtime = Arc::new(ManagedRuntime::new()?);
+    let secrets_client = {
+        let mut builder = aws_sdk_secretsmanager::config::Builder::from(&shared_config);
+        if let Some(endpoint) = config.secrets_endpoint.as_deref() {
+            builder = builder.endpoint_url(endpoint);
+        }
+        SecretsManagerClient::from_conf(builder.build())
+    };
 
-    let secrets_client = SecretsManagerClient::new(&shared_config);
-    let kms_client = KmsClient::new(&shared_config);
+    let kms_client = {
+        let mut builder = aws_sdk_kms::config::Builder::from(&shared_config);
+        if let Some(endpoint) = config.kms_endpoint.as_deref() {
+            builder = builder.endpoint_url(endpoint);
+        }
+        KmsClient::from_conf(builder.build())
+    };
 
-    let backend = AwsSecretsBackend::new(secrets_client, config.clone(), runtime.clone());
-    let key_provider = AwsKmsKeyProvider::new(kms_client, config.clone(), runtime);
+    let backend = AwsSecretsBackend::new(secrets_client, config.clone());
+    let key_provider = AwsKmsKeyProvider::new(kms_client, config.clone());
 
     Ok(BackendComponents {
         backend: Box::new(backend),
@@ -90,6 +65,8 @@ struct AwsProviderConfig {
     secret_prefix: String,
     version_stage: String,
     kms_key_id: String,
+    secrets_endpoint: Option<String>,
+    kms_endpoint: Option<String>,
 }
 
 impl AwsProviderConfig {
@@ -104,12 +81,20 @@ impl AwsProviderConfig {
         }
 
         let shared_config = loader.load().await;
+        let secrets_endpoint = env::var(SM_ENDPOINT_ENV)
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let kms_endpoint = env::var(KMS_ENDPOINT_ENV)
+            .ok()
+            .filter(|s| !s.trim().is_empty());
 
         Ok((
             Self {
                 secret_prefix: prefix,
                 version_stage: stage,
                 kms_key_id,
+                secrets_endpoint,
+                kms_endpoint,
             },
             shared_config,
         ))
@@ -141,7 +126,6 @@ impl AwsProviderConfig {
 pub struct AwsSecretsBackend {
     client: SecretsManagerClient,
     config: AwsProviderConfig,
-    runtime: Arc<ManagedRuntime>,
 }
 
 async fn fetch_secret_version_inner(
@@ -166,40 +150,20 @@ async fn fetch_secret_version_inner(
 }
 
 impl AwsSecretsBackend {
-    fn new(
-        client: SecretsManagerClient,
-        config: AwsProviderConfig,
-        runtime: Arc<ManagedRuntime>,
-    ) -> Self {
-        Self {
-            client,
-            config,
-            runtime,
-        }
-    }
-
-    fn block_on<F, T>(&self, fut: F) -> T
-    where
-        F: std::future::Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            task::block_in_place(|| handle.block_on(fut))
-        } else {
-            self.runtime.block_on(fut)
-        }
+    fn new(client: SecretsManagerClient, config: AwsProviderConfig) -> Self {
+        Self { client, config }
     }
 
     fn fetch_latest_version(&self, secret_id: &str) -> SecretsResult<Option<StoredSecret>> {
         let client = self.client.clone();
         let secret_id = secret_id.to_owned();
-        self.block_on(async move { fetch_secret_version_inner(client, secret_id, None).await })
+        rt::sync_await(async move { fetch_secret_version_inner(client, secret_id, None).await })
     }
 
     fn load_all_versions(&self, uri: &SecretUri) -> SecretsResult<Vec<StoredSecret>> {
         let client = self.client.clone();
         let secret_id = self.config.secret_name(uri);
-        self.block_on(async move {
+        rt::sync_await(async move {
             let mut collected = Vec::new();
             let mut token: Option<String> = None;
 
@@ -265,7 +229,7 @@ impl AwsSecretsBackend {
         let secret_id = secret_id.to_owned();
         let payload = payload.to_owned();
         let description = record.and_then(|rec| rec.meta.description.clone());
-        self.block_on(async move {
+        rt::sync_await(async move {
             let mut request = client
                 .create_secret()
                 .name(secret_id.clone())
@@ -295,7 +259,7 @@ impl AwsSecretsBackend {
         let secret_id = secret_id.to_owned();
         let payload = payload.to_owned();
         let version_stage = self.config.version_stage.clone();
-        self.block_on(async move {
+        rt::sync_await(async move {
             match client
                 .put_secret_value()
                 .secret_id(secret_id)
@@ -324,8 +288,7 @@ impl AwsSecretsBackend {
         let scope_team = scope.team().map(|s| s.to_string());
         let category_prefix = category_prefix.map(|s| s.to_string());
         let name_prefix = name_prefix.map(|s| s.to_string());
-
-        self.block_on(async move {
+        rt::sync_await(async move {
             let mut items = Vec::new();
             let mut token: Option<String> = None;
 
@@ -509,27 +472,13 @@ impl SecretsBackend for AwsSecretsBackend {
 pub struct AwsKmsKeyProvider {
     client: KmsClient,
     key_id: String,
-    runtime: Arc<ManagedRuntime>,
 }
 
 impl AwsKmsKeyProvider {
-    fn new(client: KmsClient, config: AwsProviderConfig, runtime: Arc<ManagedRuntime>) -> Self {
+    fn new(client: KmsClient, config: AwsProviderConfig) -> Self {
         Self {
             client,
             key_id: config.kms_key_id,
-            runtime,
-        }
-    }
-
-    fn block_on<F, T>(&self, fut: F) -> T
-    where
-        F: std::future::Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            task::block_in_place(|| handle.block_on(fut))
-        } else {
-            self.runtime.block_on(fut)
         }
     }
 
@@ -550,7 +499,7 @@ impl KeyProvider for AwsKmsKeyProvider {
         let client = self.client.clone();
         let key_id = self.key_id.clone();
         let dek = dek.to_vec();
-        self.block_on(async move {
+        rt::sync_await(async move {
             match client
                 .encrypt()
                 .key_id(&key_id)
@@ -575,7 +524,7 @@ impl KeyProvider for AwsKmsKeyProvider {
         let client = self.client.clone();
         let key_id = self.key_id.clone();
         let wrapped = wrapped.to_vec();
-        self.block_on(async move {
+        rt::sync_await(async move {
             match client
                 .decrypt()
                 .key_id(&key_id)
@@ -706,5 +655,53 @@ fn list_versions_unsupported(err: &SdkError<ListSecretVersionIdsError>) -> bool 
             Some("NotImplementedException") | Some("UnknownOperationException")
         ),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::env;
+
+    fn set_env(key: &str, value: &str) {
+        unsafe { env::set_var(key, value) };
+    }
+
+    fn clear_env(key: &str) {
+        unsafe { env::remove_var(key) };
+    }
+
+    fn setup_env() {
+        set_env(
+            "GREENTIC_AWS_KMS_KEY_ID",
+            "arn:aws:kms:us-east-1:000000000000:key/test",
+        );
+        set_env("GREENTIC_AWS_SECRET_PREFIX", "unit");
+        set_env("GREENTIC_AWS_VERSION_STAGE", "AWSCURRENT");
+        set_env("GREENTIC_AWS_REGION", "us-east-1");
+        set_env("AWS_ALLOW_HTTP", "1");
+        set_env("AWS_ACCESS_KEY_ID", "test");
+        set_env("AWS_SECRET_ACCESS_KEY", "test");
+        set_env("AWS_SESSION_TOKEN", "test");
+        set_env(SM_ENDPOINT_ENV, "http://127.0.0.1:9");
+        set_env(KMS_ENDPOINT_ENV, "http://127.0.0.1:9");
+        clear_env("AWS_PROFILE");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn aws_provider_ok_under_tokio() {
+        setup_env();
+        let BackendComponents { backend, .. } = build_backend()
+            .await
+            .expect("aws backend builds with env config");
+
+        let scope = Scope::new("dev", "tenant", None).expect("scope");
+        let result = backend.list(&scope, None, None);
+        assert!(
+            result.is_err(),
+            "list should attempt network and bubble up errors without panicking"
+        );
     }
 }

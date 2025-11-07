@@ -7,12 +7,15 @@
 
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use greentic_secrets_core::http::{Http, HttpResponse};
 use greentic_secrets_spec::{
     KeyProvider, Scope, SecretListItem, SecretRecord, SecretUri, SecretVersion, SecretsBackend,
     SecretsError, SecretsResult, VersionedSecret,
 };
-use reqwest::blocking::Client;
-use reqwest::{Method, StatusCode};
+use reqwest::{
+    Method, StatusCode,
+    header::{AUTHORIZATION, HeaderValue},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::env;
@@ -25,6 +28,14 @@ const DEFAULT_PREFIX: &str = "greentic";
 const TEAM_PLACEHOLDER: &str = "_";
 const DEFAULT_TIMEOUT_SECS: u64 = 15;
 
+fn read_response_body(response: HttpResponse) -> SecretsResult<(StatusCode, String)> {
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|err| SecretsError::Storage(format!("failed to read HTTP body: {err}")))?;
+    Ok((status, body))
+}
+
 /// Components returned to the broker wiring.
 pub struct BackendComponents {
     pub backend: Box<dyn SecretsBackend>,
@@ -34,13 +45,10 @@ pub struct BackendComponents {
 /// Construct the GCP backend using environment configuration.
 pub async fn build_backend() -> Result<BackendComponents> {
     let config = Arc::new(GcpProviderConfig::from_env()?);
-    let client = Client::builder()
-        .timeout(config.timeout)
-        .build()
-        .context("failed to build reqwest client for GCP provider")?;
+    let http = Http::new(config.timeout)?;
 
-    let backend = GcpSecretsBackend::new(config.clone(), client.clone());
-    let key_provider = GcpKmsKeyProvider::new(config, client);
+    let backend = GcpSecretsBackend::new(config.clone(), http.clone());
+    let key_provider = GcpKmsKeyProvider::new(config, http);
 
     Ok(BackendComponents {
         backend: Box::new(backend),
@@ -113,17 +121,23 @@ impl GcpProviderConfig {
     fn bearer(&self) -> String {
         format!("Bearer {access_token}", access_token = self.access_token)
     }
+
+    fn auth_header(&self) -> SecretsResult<HeaderValue> {
+        HeaderValue::from_str(&self.bearer()).map_err(|err| {
+            SecretsError::Storage(format!("invalid authorization header value: {err}"))
+        })
+    }
 }
 
 #[derive(Clone)]
 pub struct GcpSecretsBackend {
     config: Arc<GcpProviderConfig>,
-    client: Client,
+    http: Http,
 }
 
 impl GcpSecretsBackend {
-    fn new(config: Arc<GcpProviderConfig>, client: Client) -> Self {
-        Self { config, client }
+    fn new(config: Arc<GcpProviderConfig>, http: Http) -> Self {
+        Self { config, http }
     }
 
     fn secret_id(&self, uri: &SecretUri) -> String {
@@ -170,23 +184,14 @@ impl GcpSecretsBackend {
         method: Method,
         url: String,
         body: Option<Value>,
-    ) -> SecretsResult<reqwest::blocking::Response> {
-        let builder = match method {
-            Method::GET => self.client.get(url),
-            Method::POST => self.client.post(url),
-            Method::DELETE => self.client.delete(url),
-            Method::PUT => self.client.put(url),
-            other => self.client.request(other, url),
-        };
-
-        let builder = builder.header("Authorization", self.config.bearer());
-        let builder = if let Some(payload) = body {
-            builder.json(&payload)
-        } else {
-            builder
-        };
-
-        builder
+    ) -> SecretsResult<HttpResponse> {
+        let mut request = self.http.request(method, &url);
+        let auth = self.config.auth_header()?;
+        request = request.header(AUTHORIZATION.clone(), auth);
+        if let Some(payload) = body {
+            request = request.json(&payload);
+        }
+        request
             .send()
             .map_err(|err| SecretsError::Storage(format!("http request failed: {err}")))
     }
@@ -203,15 +208,13 @@ impl GcpSecretsBackend {
         });
 
         let response = self.request(Method::POST, url, Some(body))?;
-        match response.status() {
+        let (status, details) = read_response_body(response)?;
+        match status {
             StatusCode::OK | StatusCode::CREATED => Ok(()),
             StatusCode::CONFLICT => Ok(()),
-            status => {
-                let details = response.text().unwrap_or_default();
-                Err(SecretsError::Storage(format!(
-                    "create secret {secret_id} failed: {status} {details}"
-                )))
-            }
+            status => Err(SecretsError::Storage(format!(
+                "create secret {secret_id} failed: {status} {details}"
+            ))),
         }
     }
 
@@ -226,8 +229,7 @@ impl GcpSecretsBackend {
         });
 
         let response = self.request(Method::POST, url, Some(body))?;
-        let status = response.status();
-        let text = response.text().unwrap_or_default();
+        let (status, text) = read_response_body(response)?;
         if !status.is_success() {
             return Err(SecretsError::Storage(format!(
                 "add secret version failed: {status} {text}"
@@ -245,10 +247,13 @@ impl GcpSecretsBackend {
     fn fetch_version_by_name(&self, name: &str) -> SecretsResult<Option<StoredSecret>> {
         let url = format!("{name}:access");
         let response = self.request(Method::GET, url, None)?;
-        match response.status() {
+        let status = response.status();
+        match status {
             StatusCode::NOT_FOUND => Ok(None),
             status if status.is_success() => {
-                let body = response.text().unwrap_or_default();
+                let body = response
+                    .text()
+                    .map_err(|err| SecretsError::Storage(format!("failed to read body: {err}")))?;
                 let parsed: AccessSecretVersionResponse =
                     serde_json::from_str(&body).map_err(|err| {
                         SecretsError::Storage(format!(
@@ -268,9 +273,11 @@ impl GcpSecretsBackend {
                 Ok(Some(stored))
             }
             status => {
-                let text = response.text().unwrap_or_default();
+                let body = response
+                    .text()
+                    .map_err(|err| SecretsError::Storage(format!("failed to read body: {err}")))?;
                 Err(SecretsError::Storage(format!(
-                    "access secret version failed: {status} {text}"
+                    "access secret version failed: {status} {body}"
                 )))
             }
         }
@@ -292,7 +299,9 @@ impl GcpSecretsBackend {
             match response.status() {
                 StatusCode::NOT_FOUND => return Ok(Vec::new()),
                 status if status.is_success() => {
-                    let body = response.text().unwrap_or_default();
+                    let body = response.text().map_err(|err| {
+                        SecretsError::Storage(format!("failed to read body: {err}"))
+                    })?;
                     let parsed: SecretVersionsListResponse =
                         serde_json::from_str(&body).map_err(|err| {
                             SecretsError::Storage(format!(
@@ -315,9 +324,11 @@ impl GcpSecretsBackend {
                     break;
                 }
                 status => {
-                    let text = response.text().unwrap_or_default();
+                    let body = response.text().map_err(|err| {
+                        SecretsError::Storage(format!("failed to read body: {err}"))
+                    })?;
                     return Err(SecretsError::Storage(format!(
-                        "list secret versions failed: {status} {text}"
+                        "list secret versions failed: {status} {body}"
                     )));
                 }
             }
@@ -334,7 +345,9 @@ impl GcpSecretsBackend {
         match response.status() {
             StatusCode::NOT_FOUND => Ok(None),
             status if status.is_success() => {
-                let body = response.text().unwrap_or_default();
+                let body = response
+                    .text()
+                    .map_err(|err| SecretsError::Storage(format!("failed to read body: {err}")))?;
                 let parsed: AccessSecretVersionResponse =
                     serde_json::from_str(&body).map_err(|err| {
                         SecretsError::Storage(format!(
@@ -354,9 +367,11 @@ impl GcpSecretsBackend {
                 Ok(Some(stored))
             }
             status => {
-                let text = response.text().unwrap_or_default();
+                let body = response
+                    .text()
+                    .map_err(|err| SecretsError::Storage(format!("failed to read body: {err}")))?;
                 Err(SecretsError::Storage(format!(
-                    "access latest secret version failed: {status} {text}"
+                    "access latest secret version failed: {status} {body}"
                 )))
             }
         }
@@ -419,16 +434,16 @@ impl SecretsBackend for GcpSecretsBackend {
             project = self.config.project
         );
 
+        let auth = self.config.auth_header()?;
         let response = self
-            .client
-            .get(url)
-            .header("Authorization", self.config.bearer())
+            .http
+            .get(&url)
+            .header(AUTHORIZATION.clone(), auth)
             .query(&[("filter", filter.as_str())])
             .send()
             .map_err(|err| SecretsError::Storage(format!("list secrets request failed: {err}")))?;
 
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let (status, body) = read_response_body(response)?;
         if !status.is_success() {
             return Err(SecretsError::Storage(format!(
                 "list secrets failed: {status} {body}"
@@ -509,12 +524,12 @@ impl SecretsBackend for GcpSecretsBackend {
 #[derive(Clone)]
 pub struct GcpKmsKeyProvider {
     config: Arc<GcpProviderConfig>,
-    client: Client,
+    http: Http,
 }
 
 impl GcpKmsKeyProvider {
-    fn new(config: Arc<GcpProviderConfig>, client: Client) -> Self {
-        Self { config, client }
+    fn new(config: Arc<GcpProviderConfig>, http: Http) -> Self {
+        Self { config, http }
     }
 
     fn kms_request(&self, action: &str, body: Value) -> SecretsResult<Value> {
@@ -523,16 +538,16 @@ impl GcpKmsKeyProvider {
             self.config.kms_endpoint.trim_end_matches('/'),
             action = action
         );
+        let auth = self.config.auth_header()?;
         let response = self
-            .client
-            .post(url)
-            .header("Authorization", self.config.bearer())
+            .http
+            .post(&url)
+            .header(AUTHORIZATION.clone(), auth)
             .json(&body)
             .send()
             .map_err(|err| SecretsError::Backend(format!("kms request failed: {err}")))?;
 
-        let status = response.status();
-        let text = response.text().unwrap_or_default();
+        let (status, text) = read_response_body(response)?;
         if !status.is_success() {
             return Err(SecretsError::Backend(format!(
                 "kms call failed: {status} {text}"

@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use greentic_secrets_core::rt::sync_await;
 use greentic_secrets_spec::{
     Envelope, KeyProvider, Scope, SecretListItem, SecretMeta, SecretRecord, SecretUri,
     SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
@@ -20,8 +21,6 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
-mod rt;
-
 const DEFAULT_KV_MOUNT: &str = "secret";
 const DEFAULT_KV_PREFIX: &str = "greentic";
 const DEFAULT_TRANSIT_MOUNT: &str = "transit";
@@ -29,8 +28,11 @@ const DEFAULT_TRANSIT_KEY: &str = "greentic";
 const TEAM_PLACEHOLDER: &str = "_";
 
 fn read_body(response: Response) -> SecretsResult<String> {
-    rt::block_on(response.text())
-        .map_err(|err| SecretsError::Backend(format!("failed to read vault response body: {err}")))
+    sync_await(async {
+        response.text().await.map_err(|err| {
+            SecretsError::Backend(format!("failed to read vault response body: {err}"))
+        })
+    })
 }
 
 /// Components returned to the broker wiring.
@@ -143,7 +145,8 @@ impl VaultSecretsBackend {
                 "failed to decode vault write response: {err}; body={body}"
             ))
         })?;
-        Ok(parsed.data.metadata.version)
+        let metadata = parsed.data.into_metadata()?;
+        metadata.version_or(None)
     }
 
     fn read_secret(
@@ -167,12 +170,13 @@ impl VaultSecretsBackend {
                     ))
                 })?;
                 let metadata = parsed.data.metadata;
+                let version = metadata.version_or(version)?;
                 let deleted = metadata.destroyed
                     || !metadata.deletion_time.is_empty()
                     || parsed.data.data.greentic_deleted.unwrap_or(false);
                 if deleted {
                     return Ok(Some(SecretSnapshot {
-                        version: metadata.version,
+                        version,
                         deleted: true,
                         record: None,
                     }));
@@ -184,7 +188,7 @@ impl VaultSecretsBackend {
                     .map(|value| decode_stored_record(&value))
                     .transpose()?;
                 Ok(Some(SecretSnapshot {
-                    version: metadata.version,
+                    version,
                     deleted: false,
                     record,
                 }))
@@ -211,17 +215,7 @@ impl VaultSecretsBackend {
                         "failed to decode metadata response: {err}; body={body}"
                     ))
                 })?;
-                let mut entries = Vec::new();
-                for (version, _meta) in parsed.data.versions.unwrap_or_default() {
-                    let snapshot = self.read_secret(uri, Some(version))?;
-                    let deleted = match snapshot {
-                        Some(snapshot) => snapshot.deleted,
-                        None => true,
-                    };
-                    entries.push(SecretVersionEntry { version, deleted });
-                }
-                entries.sort_by_key(|entry| entry.version);
-                Ok(entries)
+                Ok(self.fold_metadata_versions(uri, parsed.data)?)
             }
             status => {
                 let body = read_body(response)?;
@@ -230,6 +224,36 @@ impl VaultSecretsBackend {
                 )))
             }
         }
+    }
+
+    fn fold_metadata_versions(
+        &self,
+        uri: &SecretUri,
+        data: KvMetadataData,
+    ) -> SecretsResult<Vec<SecretVersionEntry>> {
+        let mut entries = Vec::new();
+        if let Some(map) = data.versions {
+            for (version, meta) in map {
+                let snapshot = self.read_secret(uri, Some(version))?;
+                let resolved_version = meta.version_or(Some(version))?;
+                let deleted = snapshot.is_none_or(|snap| {
+                    snap.deleted || meta.destroyed || !meta.deletion_time.is_empty()
+                });
+                entries.push(SecretVersionEntry {
+                    version: resolved_version,
+                    deleted,
+                });
+            }
+        } else if let Some(latest) = data.current_version {
+            let snapshot = self.read_secret(uri, Some(latest))?;
+            let deleted = snapshot.is_none_or(|snap| snap.deleted);
+            entries.push(SecretVersionEntry {
+                version: latest,
+                deleted,
+            });
+        }
+        entries.sort_by_key(|entry| entry.version);
+        Ok(entries)
     }
 
     fn list_secrets_for_scope(&self, scope: &Scope) -> SecretsResult<Vec<SecretUri>> {
@@ -486,7 +510,7 @@ impl VaultProviderConfig {
         path: &str,
         body: Option<Value>,
     ) -> SecretsResult<Response> {
-        rt::block_on(self.request_async(client, method, path, body))
+        sync_await(self.request_async(client, method, path, body))
     }
 
     async fn request_async(
@@ -528,21 +552,55 @@ struct KeyListData {
 
 #[derive(Deserialize)]
 struct KvWriteResponse {
-    data: WriteMetadataWrapper,
+    data: KvWriteData,
 }
 
 #[derive(Deserialize)]
-struct WriteMetadataWrapper {
-    metadata: VersionMetadata,
+struct KvWriteData {
+    #[serde(default)]
+    metadata: Option<VersionMetadata>,
+    #[serde(default)]
+    version: Option<u64>,
+    #[serde(default)]
+    destroyed: Option<bool>,
+    #[serde(default)]
+    deletion_time: Option<String>,
+}
+
+impl KvWriteData {
+    fn into_metadata(self) -> SecretsResult<VersionMetadata> {
+        if let Some(meta) = self.metadata {
+            return Ok(meta);
+        }
+        let version = self.version.ok_or_else(|| {
+            SecretsError::Storage(
+                "vault write response missing version metadata (enable kv v2?)".into(),
+            )
+        })?;
+        Ok(VersionMetadata {
+            version: Some(version),
+            destroyed: self.destroyed.unwrap_or(false),
+            deletion_time: self.deletion_time.unwrap_or_default(),
+        })
+    }
 }
 
 #[derive(Deserialize)]
 struct VersionMetadata {
-    version: u64,
+    #[serde(default)]
+    version: Option<u64>,
     #[serde(default)]
     destroyed: bool,
     #[serde(default)]
     deletion_time: String,
+}
+
+impl VersionMetadata {
+    fn version_or(&self, fallback: Option<u64>) -> SecretsResult<u64> {
+        self.version
+            .or(fallback)
+            .ok_or_else(|| SecretsError::Storage("vault metadata missing version".into()))
+    }
 }
 
 #[derive(Deserialize)]
@@ -573,6 +631,8 @@ struct KvMetadataResponse {
 struct KvMetadataData {
     #[serde(default)]
     versions: Option<HashMap<u64, VersionMetadata>>, // serde understands numeric keys
+    #[serde(default)]
+    current_version: Option<u64>,
 }
 
 struct SecretVersionEntry {

@@ -52,8 +52,8 @@ pub enum AuthError {
     Parse(String),
 }
 
-pub fn request_access_token(
-    client: &reqwest::blocking::Client,
+pub async fn request_access_token(
+    client: &reqwest::Client,
     cfg: &KvAuthConfig,
 ) -> Result<AccessToken, AuthError> {
     let url = TOKEN_ENDPOINT_TEMPLATE.replace("{tenant}", &cfg.tenant_id);
@@ -68,16 +68,18 @@ pub fn request_access_token(
         .post(url)
         .form(&params)
         .send()
+        .await
         .map_err(|err| AuthError::Request(err.to_string()))?;
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let body = response.text().await.unwrap_or_default();
         return Err(AuthError::Unauthorized { status, body });
     }
 
     let payload: TokenResponse = response
         .json()
+        .await
         .map_err(|err| AuthError::Parse(err.to_string()))?;
 
     let expires_in = payload

@@ -1309,7 +1309,7 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "greentic-secrets"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "greentic-secrets-core",
  "greentic-secrets-provider-aws-sm",
@@ -1324,14 +1324,14 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-api"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "thiserror 2.0.17",
 ]
 
 [[package]]
 name = "greentic-secrets-broker"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-conformance"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "greentic-secrets-provider-aws-sm",
@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -1413,12 +1413,13 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "url",
  "wit-bindgen 0.47.0",
 ]
 
 [[package]]
 name = "greentic-secrets-provider-aws-sm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -1426,32 +1427,37 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-smithy-types",
  "aws-types",
+ "greentic-secrets-core",
  "greentic-secrets-spec",
  "serde",
  "serde_json",
+ "serial_test",
  "tokio",
 ]
 
 [[package]]
 name = "greentic-secrets-provider-azure-kv"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "greentic-secrets-core",
  "greentic-secrets-spec",
  "hex",
  "reqwest",
  "serde",
  "serde_json",
+ "serial_test",
  "sha2",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
 name = "greentic-secrets-provider-dev"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1466,10 +1472,11 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-gcp-sm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "greentic-secrets-core",
  "greentic-secrets-spec",
  "reqwest",
  "serde",
@@ -1478,24 +1485,28 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-k8s"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "greentic-secrets-core",
  "greentic-secrets-spec",
  "reqwest",
  "serde",
  "serde_json",
+ "serial_test",
  "sha2",
+ "tokio",
  "url",
 ]
 
 [[package]]
 name = "greentic-secrets-provider-vault-kv"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "greentic-secrets-core",
  "greentic-secrets-spec",
  "once_cell",
  "reqwest",
@@ -1506,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-runner"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1515,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-spec"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "schemars",

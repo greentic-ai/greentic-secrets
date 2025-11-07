@@ -18,7 +18,8 @@ name = "secrets_provider_azure_kv"
 anyhow = { workspace = true }
 base64 = { workspace = true }
 greentic_secrets_spec = { workspace = true }
-reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls", "blocking"] }
+greentic_secrets_core = { workspace = true }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -26,3 +27,7 @@ hex = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }

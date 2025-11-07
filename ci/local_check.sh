@@ -8,7 +8,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-LOCAL_CHECK_ONLINE="${LOCAL_CHECK_ONLINE:-0}"
+LOCAL_CHECK_ONLINE="${LOCAL_CHECK_ONLINE:-1}"
 LOCAL_CHECK_STRICT="${LOCAL_CHECK_STRICT:-0}"
 LOCAL_CHECK_VERBOSE="${LOCAL_CHECK_VERBOSE:-0}"
 LOCAL_CHECK_COVERAGE="${LOCAL_CHECK_COVERAGE:-0}"
@@ -149,6 +149,31 @@ ensure_core_tool cargo
 ensure_core_tool rustc
 
 print_tool_versions
+
+check_provider_blocking_guards() {
+  step "Guard: providers avoid blocking HTTP/runtime APIs"
+  if ! have rg; then
+    echo "[warn] rg not available; skipping provider blocking guard"
+    return
+  fi
+  if rg -n --glob 'providers/**' --glob '!providers/greentic-k8s/**' 'reqwest::blocking' >/dev/null; then
+    echo "[fail] found forbidden reqwest::blocking usage outside the temporary k8s allowlist"
+    rg -n --glob 'providers/**' --glob '!providers/greentic-k8s/**' 'reqwest::blocking'
+    exit 1
+  fi
+
+  if rg -n 'reqwest::blocking' providers/greentic-k8s >/dev/null; then
+    echo "[warn] providers/greentic-k8s still uses reqwest::blocking (allowed temporarily)"
+  fi
+
+  if rg -n --glob 'providers/**' 'tokio::runtime::Runtime::new' >/dev/null; then
+    echo "[fail] found tokio::runtime::Runtime::new inside providers"
+    rg -n --glob 'providers/**' 'tokio::runtime::Runtime::new'
+    exit 1
+  fi
+}
+
+check_provider_blocking_guards
 
 run_fmt() {
   step "cargo fmt --all -- --check"

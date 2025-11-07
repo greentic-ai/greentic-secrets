@@ -8,12 +8,12 @@
 
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use greentic_secrets_core::http::{Http, HttpResponse};
 use greentic_secrets_spec::{
     Envelope, KeyProvider, Scope, SecretListItem, SecretMeta, SecretRecord, SecretUri,
     SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
 };
-use reqwest::blocking::{Client, Response};
-use reqwest::{Method, StatusCode};
+use reqwest::{Certificate, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -45,10 +45,10 @@ pub struct BackendComponents {
 /// Construct the backend and key provider from environment configuration.
 pub async fn build_backend() -> Result<BackendComponents> {
     let config = Arc::new(K8sProviderConfig::from_env()?);
-    let client = config.build_http_client()?;
+    let http = config.build_http_client()?;
 
-    let backend = K8sSecretsBackend::new(config.clone(), client.clone());
-    let key_provider = K8sKeyProvider::new(config, client);
+    let backend = K8sSecretsBackend::new(config.clone(), http.clone());
+    let key_provider = K8sKeyProvider::new(config);
     Ok(BackendComponents {
         backend: Box::new(backend),
         key_provider: Box::new(key_provider),
@@ -58,22 +58,27 @@ pub async fn build_backend() -> Result<BackendComponents> {
 #[derive(Clone)]
 struct K8sSecretsBackend {
     config: Arc<K8sProviderConfig>,
-    client: Client,
+    http: Http,
 }
 
 impl K8sSecretsBackend {
-    fn new(config: Arc<K8sProviderConfig>, client: Client) -> Self {
-        Self { config, client }
+    fn new(config: Arc<K8sProviderConfig>, http: Http) -> Self {
+        Self { config, http }
     }
 
-    fn request(&self, method: Method, path: &str, body: Option<Value>) -> SecretsResult<Response> {
+    fn request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> SecretsResult<HttpResponse> {
         let url = format!(
             "{}/{}",
             self.config.api_server.trim_end_matches('/'),
             path.trim_start_matches('/')
         );
 
-        let mut builder = self.client.request(method, url);
+        let mut builder = self.http.request(method, url);
         builder = builder.bearer_auth(&self.config.bearer_token);
         if let Some(payload) = body {
             builder = builder.json(&payload);
@@ -86,14 +91,12 @@ impl K8sSecretsBackend {
 
     fn ensure_namespace(&self, namespace: &str) -> SecretsResult<()> {
         let path = format!("/api/v1/namespaces/{namespace}");
-        let response = self.request(Method::GET, &path, None)?;
-        let status = response.status();
+        let (status, body) = read_k8s_response(self.request(Method::GET, &path, None)?)?;
         if status == StatusCode::OK {
             return Ok(());
         }
 
         if status != StatusCode::NOT_FOUND {
-            let body = response.text().unwrap_or_default();
             return Err(SecretsError::Storage(format!(
                 "failed to inspect namespace: {status} {body}"
             )));
@@ -104,9 +107,8 @@ impl K8sSecretsBackend {
             "kind": "Namespace",
             "metadata": { "name": namespace },
         });
-        let response = self.request(Method::POST, "/api/v1/namespaces", Some(create))?;
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let (status, body) =
+            read_k8s_response(self.request(Method::POST, "/api/v1/namespaces", Some(create))?)?;
         if !status.is_success() {
             return Err(SecretsError::Storage(format!(
                 "failed to create namespace: {status} {body}"
@@ -117,9 +119,8 @@ impl K8sSecretsBackend {
 
     fn put_secret(&self, namespace: &str, manifest: Value) -> SecretsResult<()> {
         let path = format!("/api/v1/namespaces/{namespace}/secrets");
-        let response = self.request(Method::POST, &path, Some(manifest))?;
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let (status, body) =
+            read_k8s_response(self.request(Method::POST, &path, Some(manifest))?)?;
         if !status.is_success() {
             return Err(SecretsError::Storage(format!(
                 "create secret failed: {status} {body}"
@@ -143,12 +144,10 @@ impl K8sSecretsBackend {
                 path.push_str(&percent_encode(token));
             }
 
-            let response = self.request(Method::GET, &path, None)?;
-            let status = response.status();
+            let (status, body) = read_k8s_response(self.request(Method::GET, &path, None)?)?;
             if status == StatusCode::NOT_FOUND {
                 break;
             }
-            let body = response.text().unwrap_or_default();
             if !status.is_success() {
                 return Err(SecretsError::Storage(format!(
                     "list secrets failed: {status} {body}"
@@ -175,6 +174,14 @@ impl K8sSecretsBackend {
         snapshots.sort_by_key(|snapshot| snapshot.version);
         Ok(snapshots)
     }
+}
+
+fn read_k8s_response(response: HttpResponse) -> SecretsResult<(StatusCode, String)> {
+    let status = response.status();
+    let body = response.text().map_err(|err| {
+        SecretsError::Storage(format!("failed to read kubernetes response body: {err}"))
+    })?;
+    Ok((status, body))
 }
 
 impl SecretsBackend for K8sSecretsBackend {
@@ -252,14 +259,11 @@ impl SecretsBackend for K8sSecretsBackend {
         name_prefix: Option<&str>,
     ) -> SecretsResult<Vec<SecretListItem>> {
         let namespace = namespace_for_scope(&self.config, scope);
-        let response = self.request(
+        let (status, body) = read_k8s_response(self.request(
             Method::GET,
             &format!("/api/v1/namespaces/{namespace}/secrets?limit=250"),
             None,
-        )?;
-
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
+        )?)?;
         if !status.is_success() {
             return Err(SecretsError::Storage(format!(
                 "list secrets failed: {status} {body}"
@@ -362,15 +366,11 @@ impl SecretsBackend for K8sSecretsBackend {
 #[derive(Clone)]
 struct K8sKeyProvider {
     config: Arc<K8sProviderConfig>,
-    _client: Client,
 }
 
 impl K8sKeyProvider {
-    fn new(config: Arc<K8sProviderConfig>, client: Client) -> Self {
-        Self {
-            config,
-            _client: client,
-        }
+    fn new(config: Arc<K8sProviderConfig>) -> Self {
+        Self { config }
     }
 
     fn derive_key(&self, alias: &str) -> Vec<u8> {
@@ -472,20 +472,18 @@ impl K8sProviderConfig {
         })
     }
 
-    fn build_http_client(&self) -> Result<Client> {
-        let mut builder = Client::builder().timeout(self.request_timeout);
+    fn build_http_client(&self) -> Result<Http> {
+        let mut builder = reqwest::Client::builder().timeout(self.request_timeout);
         if let Some(ca) = self.ca_bundle.as_ref() {
-            let cert = reqwest::Certificate::from_pem(ca)
-                .or_else(|_| reqwest::Certificate::from_der(ca))
+            let cert = Certificate::from_pem(ca)
+                .or_else(|_| Certificate::from_der(ca))
                 .context("failed to parse K8S_CA_BUNDLE")?;
             builder = builder.add_root_certificate(cert);
         }
         if self.insecure_skip_tls {
             builder = builder.danger_accept_invalid_certs(true);
         }
-        builder
-            .build()
-            .context("failed to build kubernetes HTTP client")
+        Http::from_builder(builder).context("failed to build kubernetes HTTP client")
     }
 }
 
@@ -823,4 +821,46 @@ fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
 
 fn percent_encode(value: &str) -> String {
     byte_serialize(value.as_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use greentic_secrets_spec::Scope;
+    use serial_test::serial;
+    use std::env;
+
+    fn set_env(key: &str, value: &str) {
+        unsafe { env::set_var(key, value) };
+    }
+
+    fn clear_env(key: &str) {
+        unsafe { env::remove_var(key) };
+    }
+
+    fn setup_env() {
+        set_env("K8S_API_SERVER", "http://127.0.0.1:9");
+        set_env("K8S_BEARER_TOKEN", "test-token");
+        set_env("K8S_NAMESPACE_PREFIX", "unit");
+        set_env("K8S_KEK_ALIAS", "default");
+        set_env("K8S_INSECURE_SKIP_TLS", "1");
+        set_env("K8S_HTTP_TIMEOUT_SECS", "1");
+        clear_env("K8S_BEARER_TOKEN_FILE");
+        clear_env("K8S_CA_BUNDLE");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn k8s_provider_ok_under_tokio() {
+        setup_env();
+        let BackendComponents { backend, .. } =
+            build_backend().await.expect("k8s backend builds from env");
+
+        let scope = Scope::new("dev", "tenant", None).expect("scope");
+        let result = backend.list(&scope, None, None);
+        assert!(
+            result.is_err(),
+            "list should attempt network and surface the failure without panicking"
+        );
+    }
 }
