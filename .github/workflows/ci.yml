@@ -9,6 +9,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace --all-features
       - run: RUST_BACKTRACE=1 cargo test --workspace --all-features -- --nocapture
+      - name: Deny reqwest::blocking in Vault provider
+        run: |
+          if git grep -n "reqwest::blocking" -- providers/greentic-vault-kv >/dev/null; then
+            echo "Do not use reqwest::blocking (causes runtime panics)" >&2
+            exit 1
+          fi
 
   local-providers:
     runs-on: ubuntu-latest

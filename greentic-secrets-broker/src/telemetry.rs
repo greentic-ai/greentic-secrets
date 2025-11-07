@@ -4,7 +4,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use greentic_types::telemetry::set_current_tenant_ctx;
 use greentic_types::{EnvId, TeamId, TenantCtx, TenantId, UserId};
-use tracing::{Span, info_span};
+use tracing::{Span, info_span, warn};
 use uuid::Uuid;
 
 use crate::auth::AuthContext;
@@ -64,14 +64,42 @@ pub fn set_tenant_context(
     correlation: &CorrelationId,
     auth: Option<&AuthContext>,
 ) {
-    let mut ctx =
-        TenantCtx::new(EnvId::from(env), TenantId::from(tenant)).with_provider("secrets-broker");
+    let env_id = match env.parse::<EnvId>() {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(env = %env, error = %err, "failed to parse env id");
+            return;
+        }
+    };
+    let tenant_id = match tenant.parse::<TenantId>() {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(tenant = %tenant, error = %err, "failed to parse tenant id");
+            return;
+        }
+    };
+
+    let mut ctx = TenantCtx::new(env_id, tenant_id).with_provider("secrets-broker");
     let team_value = team
         .map(|value| value.to_string())
         .or_else(|| auth.and_then(|ctx| ctx.team.clone()));
-    ctx = ctx.with_team(team_value.map(TeamId::from));
+    let team_id = team_value.and_then(|value| match value.parse::<TeamId>() {
+        Ok(team_id) => Some(team_id),
+        Err(err) => {
+            warn!(team = %value, error = %err, "failed to parse team id");
+            None
+        }
+    });
+    ctx = ctx.with_team(team_id);
     if let Some(auth_ctx) = auth {
-        ctx = ctx.with_user(Some(UserId::from(auth_ctx.subject.as_str())));
+        match auth_ctx.subject.parse::<UserId>() {
+            Ok(user_id) => {
+                ctx = ctx.with_user(Some(user_id));
+            }
+            Err(err) => {
+                warn!(subject = %auth_ctx.subject, error = %err, "failed to parse user id");
+            }
+        }
     }
     let mut final_ctx = ctx;
     final_ctx.correlation_id = Some(correlation.0.clone());

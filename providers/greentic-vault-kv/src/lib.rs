@@ -12,8 +12,7 @@ use greentic_secrets_spec::{
     Envelope, KeyProvider, Scope, SecretListItem, SecretMeta, SecretRecord, SecretUri,
     SecretVersion, SecretsBackend, SecretsError, SecretsResult, VersionedSecret,
 };
-use reqwest::blocking::{Client, Response};
-use reqwest::{Method, StatusCode};
+use reqwest::{Client, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -21,11 +20,18 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
+mod rt;
+
 const DEFAULT_KV_MOUNT: &str = "secret";
 const DEFAULT_KV_PREFIX: &str = "greentic";
 const DEFAULT_TRANSIT_MOUNT: &str = "transit";
 const DEFAULT_TRANSIT_KEY: &str = "greentic";
 const TEAM_PLACEHOLDER: &str = "_";
+
+fn read_body(response: Response) -> SecretsResult<String> {
+    rt::block_on(response.text())
+        .map_err(|err| SecretsError::Backend(format!("failed to read vault response body: {err}")))
+}
 
 /// Components returned to the broker wiring.
 pub struct BackendComponents {
@@ -92,7 +98,7 @@ impl VaultSecretsBackend {
         match response.status() {
             StatusCode::NOT_FOUND => Ok(Vec::new()),
             status if status.is_success() => {
-                let body = response.text().unwrap_or_default();
+                let body = read_body(response)?;
                 let list: KeyListResponse = serde_json::from_str(&body).map_err(|err| {
                     SecretsError::Storage(format!(
                         "failed to decode vault key list: {err}; body={body}"
@@ -101,7 +107,7 @@ impl VaultSecretsBackend {
                 Ok(list.data.keys.unwrap_or_default())
             }
             status => {
-                let body = response.text().unwrap_or_default();
+                let body = read_body(response)?;
                 Err(SecretsError::Storage(format!(
                     "list keys failed: {status} {body}"
                 )))
@@ -126,7 +132,7 @@ impl VaultSecretsBackend {
         let body = Value::Object(body_obj);
         let response = self.request(Method::POST, &path, Some(body))?;
         let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let body = read_body(response)?;
         if !status.is_success() {
             return Err(SecretsError::Storage(format!(
                 "write secret failed: {status} {body}"
@@ -154,7 +160,7 @@ impl VaultSecretsBackend {
         match response.status() {
             StatusCode::NOT_FOUND => Ok(None),
             status if status.is_success() => {
-                let body = response.text().unwrap_or_default();
+                let body = read_body(response)?;
                 let parsed: KvReadResponse = serde_json::from_str(&body).map_err(|err| {
                     SecretsError::Storage(format!(
                         "failed to decode vault read response: {err}; body={body}"
@@ -184,7 +190,7 @@ impl VaultSecretsBackend {
                 }))
             }
             status => {
-                let body = response.text().unwrap_or_default();
+                let body = read_body(response)?;
                 Err(SecretsError::Storage(format!(
                     "read secret failed: {status} {body}"
                 )))
@@ -199,7 +205,7 @@ impl VaultSecretsBackend {
         match response.status() {
             StatusCode::NOT_FOUND => Ok(Vec::new()),
             status if status.is_success() => {
-                let body = response.text().unwrap_or_default();
+                let body = read_body(response)?;
                 let parsed: KvMetadataResponse = serde_json::from_str(&body).map_err(|err| {
                     SecretsError::Storage(format!(
                         "failed to decode metadata response: {err}; body={body}"
@@ -218,7 +224,7 @@ impl VaultSecretsBackend {
                 Ok(entries)
             }
             status => {
-                let body = response.text().unwrap_or_default();
+                let body = read_body(response)?;
                 Err(SecretsError::Storage(format!(
                     "metadata lookup failed: {status} {body}"
                 )))
@@ -357,7 +363,7 @@ impl VaultTransitProvider {
         );
         let response = self.request(Method::POST, &path, Some(body))?;
         let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let body = read_body(response)?;
         if !status.is_success() {
             return Err(SecretsError::Backend(format!(
                 "vault transit call failed: {status} {body}"
@@ -460,7 +466,7 @@ impl VaultProviderConfig {
     }
 
     fn build_http_client(&self) -> Result<Client> {
-        let mut builder = Client::builder().timeout(self.timeout);
+        let mut builder = Client::builder().timeout(self.timeout).use_rustls_tls();
         if let Some(ca) = self.ca_bundle.as_ref() {
             let cert = reqwest::Certificate::from_pem(ca)
                 .or_else(|_| reqwest::Certificate::from_der(ca))
@@ -474,6 +480,16 @@ impl VaultProviderConfig {
     }
 
     fn request(
+        &self,
+        client: &Client,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> SecretsResult<Response> {
+        rt::block_on(self.request_async(client, method, path, body))
+    }
+
+    async fn request_async(
         &self,
         client: &Client,
         method: Method,
@@ -495,6 +511,7 @@ impl VaultProviderConfig {
         }
         builder
             .send()
+            .await
             .map_err(|err| SecretsError::Backend(format!("vault request failed: {err}")))
     }
 }
@@ -656,4 +673,59 @@ fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
     STANDARD
         .decode(input.as_bytes())
         .map_err(|err| SecretsError::Storage(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use once_cell::sync::Lazy;
+    use std::sync::Mutex;
+
+    static ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    struct EnvReset {
+        vars: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvReset {
+        fn new(pairs: &[(&'static str, &str)]) -> Self {
+            let mut vars = Vec::new();
+            for (key, value) in pairs {
+                vars.push((*key, std::env::var(key).ok()));
+                unsafe { std::env::set_var(key, value) };
+            }
+            Self { vars }
+        }
+    }
+
+    impl Drop for EnvReset {
+        fn drop(&mut self) {
+            for (key, previous) in self.vars.drain(..) {
+                if let Some(val) = previous {
+                    unsafe { std::env::set_var(key, val) };
+                } else {
+                    unsafe { std::env::remove_var(key) };
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn vault_provider_does_not_panic_under_tokio() {
+        let _guard = ENV_GUARD.lock().expect("env guard");
+        let _env = EnvReset::new(&[
+            ("VAULT_ADDR", "http://127.0.0.1:9"),
+            ("VAULT_TOKEN", "test-token"),
+        ]);
+
+        let config = Arc::new(VaultProviderConfig::from_env().expect("vault config"));
+        let client = config.build_http_client().expect("http client");
+        let backend = VaultSecretsBackend::new(config, client);
+
+        let scope = Scope::new(String::from("env"), String::from("tenant"), None).expect("scope");
+        let uri = SecretUri::new(scope, "category", "name").expect("uri");
+
+        let result = backend.get(&uri, None);
+        assert!(result.is_err());
+    }
 }
