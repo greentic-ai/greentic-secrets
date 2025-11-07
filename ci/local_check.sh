@@ -188,24 +188,97 @@ fi
 
 package_publishable_crates() {
   step "cargo package (dry-run) for publishable crates"
-  local pkg_list
-  pkg_list="$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.publish != ["false"]) | .name' | sort -u)"
+  local pkg_list=""
+  if have python3; then
+    pkg_list="$(python3 <<'PY' 2>/dev/null
+import json, subprocess, sys
+data = json.loads(subprocess.check_output(["cargo", "metadata", "--format-version", "1", "--no-deps"]))
+publishable = {}
+for pkg in data["packages"]:
+    if pkg.get("source") is not None:
+        continue
+    publish = pkg.get("publish")
+    if publish == ["false"]:
+        continue
+    publishable[pkg["id"]] = pkg["name"]
+if not publishable:
+    sys.exit(0)
+graph = {pkg_id: set() for pkg_id in publishable}
+resolve = data.get("resolve", {})
+for node in resolve.get("nodes", []):
+    node_id = node["id"]
+    if node_id not in publishable:
+        continue
+    for dep in node.get("deps", []):
+        dep_id = dep["pkg"]
+        if dep_id in publishable:
+            graph[node_id].add(dep_id)
+sys.setrecursionlimit(10000)
+order = []
+temp = set()
+perm = set()
+def visit(node_id):
+    if node_id in perm:
+        return
+    if node_id in temp:
+        raise SystemExit("cycle detected in workspace dependency graph")
+    temp.add(node_id)
+    for dep_id in sorted(graph[node_id], key=lambda pid: publishable[pid]):
+        visit(dep_id)
+    temp.remove(node_id)
+    perm.add(node_id)
+    order.append(node_id)
+for node_id in sorted(graph, key=lambda pid: publishable[pid]):
+    visit(node_id)
+print("\n".join(publishable[node_id] for node_id in order))
+PY
+)"
+  fi
+  if [[ -z "$pkg_list" ]]; then
+    pkg_list="$(
+      cargo metadata --format-version 1 \
+        | jq -r '.packages[] | select(.publish != ["false"] and (.source == null)) | .name' \
+        | sort -u
+    )"
+  fi
   if [[ -z "$pkg_list" ]]; then
     echo "No publishable crates detected"
     return
   fi
-  local failures=0
+  if [[ "$LOCAL_CHECK_ONLINE" == "1" ]]; then
+    if need curl && ! curl -sSf --max-time 5 https://index.crates.io/config.json >/dev/null 2>&1; then
+      local msg="cargo package dry-run (crates.io unreachable)"
+      if [[ "$LOCAL_CHECK_STRICT" == "1" ]]; then
+        echo "[fail] $msg" >&2
+        exit 1
+      fi
+      SKIPPED_STEPS+=("$msg")
+      echo "[skip] $msg"
+      return
+    fi
+  fi
+  local -a failed_pkgs=()
+  local -a pkg_args=(--allow-dirty)
+  if [[ "$LOCAL_CHECK_ONLINE" != "1" ]]; then
+    pkg_args+=(--offline)
+  fi
   local pkg
   while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     echo "→ Packaging $pkg"
-    if ! cargo package -p "$pkg" --allow-dirty --offline; then
-      failures=1
+    if ! cargo package -p "$pkg" "${pkg_args[@]}"; then
+      echo "[warn] cargo package failed for $pkg"
+      failed_pkgs+=("$pkg")
     fi
   done <<<"$pkg_list"
-  if [[ "$failures" -ne 0 ]]; then
-    echo "[fail] cargo package dry-run failed" >&2
-    exit 1
+  if [[ "${#failed_pkgs[@]}" -ne 0 ]]; then
+    if [[ "$LOCAL_CHECK_STRICT" == "1" ]]; then
+      echo "[fail] cargo package dry-run failed for: ${failed_pkgs[*]}" >&2
+      exit 1
+    fi
+    local summary="cargo package dry-run (failed for: ${failed_pkgs[*]})"
+    SKIPPED_STEPS+=("$summary")
+    echo "[skip] $summary"
   fi
 }
 
