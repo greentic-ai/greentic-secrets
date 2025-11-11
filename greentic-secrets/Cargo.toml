@@ -12,9 +12,12 @@ categories = ["config", "authentication", "cryptography"]
 include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [features]
-default = ["core", "spec"]
+default = ["core", "spec", "env"]
 core = ["dep:greentic_secrets_core"]
 spec = ["dep:greentic_secrets_spec"]
+env = [
+	"dep:async-trait",
+]
 providers-aws = ["dep:greentic_secrets_provider_aws"]
 providers-azure = ["dep:greentic_secrets_provider_azure"]
 providers-gcp = ["dep:greentic_secrets_provider_gcp"]
@@ -32,3 +35,8 @@ greentic_secrets_provider_k8s = { workspace = true, optional = true }
 greentic_secrets_provider_vault = { workspace = true, optional = true }
 greentic_secrets_provider_dev_env = { workspace = true, optional = true }
 greentic-types = { workspace = true }
+greentic_secrets_api = { workspace = true }
+async-trait = { workspace = true, optional = true }
+
+[dev-dependencies]
+futures = { workspace = true }

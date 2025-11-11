@@ -1,6 +1,14 @@
 pub use greentic_secrets_core as core;
 pub use greentic_secrets_spec as spec;
 
+pub use greentic_secrets_api::*;
+
+#[cfg(feature = "env")]
+pub mod env;
+
+#[cfg(feature = "env")]
+pub use env::EnvSecretsManager;
+
 #[cfg(feature = "providers-aws")]
 pub use greentic_secrets_provider_aws as aws;
 #[cfg(feature = "providers-azure")]
