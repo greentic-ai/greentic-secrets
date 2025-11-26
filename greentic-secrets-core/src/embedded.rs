@@ -413,6 +413,20 @@ impl SecretsCore {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
+    /// Retrieve a secret along with its metadata (decrypted).
+    pub async fn get_secret_with_meta(
+        &self,
+        uri: &str,
+    ) -> Result<crate::BrokerSecret, SecretsError> {
+        let uri = self.parse_uri(uri)?;
+        self.ensure_scope_allowed(uri.scope())?;
+        let secret = self
+            .fetch_secret(&uri)?
+            .ok_or_else(|| SecretsError::not_found(&uri))?;
+        self.store_cache(uri.to_string(), &secret);
+        Ok(secret)
+    }
+
     /// Store JSON content at the provided URI.
     pub async fn put_json<T: Serialize>(
         &self,

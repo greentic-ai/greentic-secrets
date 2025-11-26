@@ -130,7 +130,8 @@ export).
 For backend mapping rules see [`docs/backends.md`](docs/backends.md); policy
 notes live under [`docs/policy.md`](docs/policy.md). Operator-focused guidance
 is captured in [`docs/security.md`](docs/security.md) and
-[`docs/rotation.md`](docs/rotation.md).
+[`docs/rotation.md`](docs/rotation.md). Events/messaging provider naming and
+helper APIs are documented in [`docs/events_messaging_secrets.md`](docs/events_messaging_secrets.md).
 
 ## Self-described secrets
 

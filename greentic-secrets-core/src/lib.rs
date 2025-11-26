@@ -12,6 +12,7 @@ pub mod key_provider;
 pub mod policy;
 pub mod probe;
 pub mod provider;
+pub mod provider_secrets;
 pub mod resolver;
 pub mod rt;
 pub mod spec;
@@ -44,6 +45,10 @@ pub use errors::{DecryptError, DecryptResult, Error, Result};
 pub use key_provider::KeyProvider;
 pub use policy::{Authorizer, PolicyGuard, Principal};
 pub use provider::Provider;
+pub use provider_secrets::{
+    ProviderSecret, events_provider_secret_uri, get_events_provider_secret,
+    get_messaging_adapter_secret, messaging_adapter_secret_uri, ttl_duration, ttl_seconds,
+};
 pub use resolver::{DefaultResolver, ResolverConfig};
 pub use spec::{SecretDescribable, SecretSpec};
 pub use types::{

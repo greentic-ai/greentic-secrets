@@ -55,7 +55,10 @@ println!("db_password: {password:?}");
 
 See the repository root [`docs/embedded.md`](../docs/embedded.md) for
 configuration knobs (TTL, cache backends, invalidation semantics) and
-[`docs/backends.md`](../docs/backends.md) for backend mapping rules.
+[`docs/backends.md`](../docs/backends.md) for backend mapping rules. Events and
+messaging provider secrets use the shared helper APIs documented in
+[`docs/events_messaging_secrets.md`](../docs/events_messaging_secrets.md); see
+`examples/provider_secrets.rs` for a runnable snippet.
 
 ## Working with Providers
 
