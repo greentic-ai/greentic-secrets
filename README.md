@@ -134,6 +134,8 @@ is captured in [`docs/security.md`](docs/security.md) and
 helper APIs are documented in [`docs/events_messaging_secrets.md`](docs/events_messaging_secrets.md).
 Signing key reference helpers (no signing logic) are documented in
 [`docs/signing_key_refs.md`](docs/signing_key_refs.md).
+API key reference helpers for store/distributor/billing are in
+[`docs/api_key_refs.md`](docs/api_key_refs.md).
 
 ## Self-described secrets
 

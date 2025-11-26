@@ -1,4 +1,5 @@
 pub use greentic_secrets_core as core;
+pub use greentic_secrets_core::api_keys;
 pub use greentic_secrets_core::provider_secrets;
 pub use greentic_secrets_core::signing_keys;
 pub use greentic_secrets_spec as spec;

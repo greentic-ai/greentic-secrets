@@ -1,5 +1,6 @@
 //! Core domain primitives shared across brokers, SDKs, and providers.
 
+pub mod api_keys;
 pub mod backend;
 pub mod broker;
 pub mod crypto;
@@ -27,6 +28,10 @@ pub mod uri;
 pub use crate::spec_registry::SecretSpecRegistry;
 pub use crate::spec_schema::specs_to_json_schema;
 pub use crate::spec_validate::SecretValidationResult;
+pub use api_keys::{
+    billing_api_key_uri, distributor_api_key_uri, get_billing_provider_api_key_ref,
+    get_distributor_api_key_ref, get_repo_api_key_ref, repo_api_key_uri,
+};
 #[cfg(feature = "aws")]
 pub use backend::aws::AwsSecretsManagerBackend;
 #[cfg(feature = "env")]
