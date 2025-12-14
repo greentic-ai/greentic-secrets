@@ -7,7 +7,8 @@ use greentic_secrets_core::seed::{
     ApplyOptions, ApplyReport, DevContext, DevStore, HttpStore, SecretsStore, apply_seed,
     resolve_uri,
 };
-use greentic_secrets_spec::{SecretFormat, SecretRequirement, SeedDoc, SeedEntry, SeedValue};
+use greentic_secrets_spec::{SeedDoc, SeedEntry, SeedValue};
+use greentic_types::secrets::{SecretFormat, SecretRequirement};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

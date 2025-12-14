@@ -7,9 +7,8 @@ use crate::spec_compat::{ContentType, SecretMeta, Visibility};
 use crate::uri::SecretUri;
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use greentic_secrets_spec::{
-    SecretFormat, SecretRequirement, SecretScope, SeedDoc, SeedEntry, SeedValue,
-};
+use greentic_secrets_spec::{SeedDoc, SeedEntry, SeedValue};
+use greentic_types::secrets::{SecretFormat, SecretRequirement, SecretScope};
 #[cfg(feature = "schema-validate")]
 use jsonschema::JSONSchema;
 use reqwest::Client;
@@ -460,14 +459,13 @@ mod tests {
     fn resolve_uri_formats_placeholder() {
         let ctx = DevContext::new("dev", "acme", None);
         let req = SecretRequirement {
-            key: greentic_secrets_spec::SecretKey::new("configs/db").unwrap(),
+            key: greentic_types::secrets::SecretKey::parse("configs/db").unwrap(),
             required: true,
             description: None,
             scope: SecretScope {
                 env: "dev".into(),
                 tenant: "acme".into(),
                 team: None,
-                vars: Default::default(),
             },
             format: SecretFormat::Text,
             schema: None,

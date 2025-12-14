@@ -24,6 +24,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 time = { workspace = true }
 schemars = { workspace = true, optional = true }
+greentic-types = { workspace = true }
 
 [dev-dependencies]
 serde_yaml = "0.9"

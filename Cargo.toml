@@ -2,6 +2,7 @@
 members = [
     "crates/greentic-config",
     "crates/greentic-config-types",
+    "crates/greentic-types",
     "greentic-secrets-api",
     "greentic-secrets-spec",
     "greentic-secrets-core",
@@ -23,7 +24,7 @@ resolver = "2"
 edition = "2024"
 rust-version = "1"
 license = "MIT"
-version = "0.4.6"
+version = "0.4.7"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -64,7 +65,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net
 tower = "0.5"
 tower-http = "0.6"
 tracing = "0.1"
-greentic-types = { version = "0.4", features = ["telemetry-autoinit"] }
+greentic-types = { version = "0.4.15", path = "crates/greentic-types", features = ["telemetry-autoinit"] }
 url = "2"
 uuid = "1"
 wit-bindgen = "0.49"
