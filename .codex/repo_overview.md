@@ -17,14 +17,22 @@
   **Role:** Embedded runtime for fetching/sealing secrets.  
   **Key functionality:** `SecretsCore` builder with TTL/cache, policy/resolver logic, optional HTTP/NATS/dek cache features, helper APIs for provider secrets, signing keys, and API keys; seed/apply pipeline (`DevContext` resolver, seed normalization, apply to pluggable `SecretsStore`, optional JSON-schema validation), dev-store adapter using the dev provider; example programs for embedded fetch, validation, and broker wiring.  
   **Key dependencies / integration points:** Uses `reqwest`/`tokio` when features enabled; integrates with providers via `SecretsBackend`/`KeyProvider`; dev-store feature uses `greentic-secrets-provider-dev`.
+- **Path:** `crates/greentic-config-types`  
+  **Role:** Canonical configuration schema (no IO).  
+  **Key functionality:** `GreenticConfig` root with environment/paths/runtime/telemetry/network/secrets/dev sections, provenance helpers, serde-only types; reuses `EnvId`/`DeploymentCtx`/`ConnectionKind` from `greentic-types`.  
+  **Key dependencies / integration points:** Serde, `greentic-types`.
+- **Path:** `crates/greentic-config`  
+  **Role:** Config resolver with precedence, validation, and explain output.  
+  **Key functionality:** Loads defaults + user config + project/override config + env + CLI overrides; deep merge with provenance tracking; basic validation (offline vs remote endpoints, insecure TLS outside dev, low timeouts); explain report (human + JSON).  
+  **Key dependencies / integration points:** Uses `greentic-config-types`, `dirs`, `toml`, serde/anyhow; consumed by CLI/broker.
 - **Path:** `greentic-secrets-broker`  
   **Role:** HTTP/NATS broker exposing the secrets engine and a CLI for spec tooling.  
-  **Key functionality:** Binaries for the broker service and `secrets` CLI (print/check/schema subcommands) that load component secret specs (examples/plugins) and validate against a configured backend.  
-  **Key dependencies / integration points:** Axum + NATS for transport; telemetry via `greentic-types`; composes provider backends.
+  **Key functionality:** Binaries for the broker service and `secrets` CLI (print/check/schema subcommands) that load component secret specs (examples/plugins) and validate against a configured backend; broker now loads config via `greentic-config` (CLI/env overrides supported) and applies network/proxy settings before wiring backends.  
+  **Key dependencies / integration points:** Axum + NATS for transport; telemetry via `greentic-types`; composes provider backends; config via `greentic-config`.
 - **Path:** `crates/greentic-secrets-cli`  
   **Role:** Dedicated CLI binary (`greentic-secrets`) for dev flows and seed handling.  
-  **Key functionality:** Commands for `dev up/down` (prepare/remove local dev store), `ctx set/show` (store dev-only context), `scaffold` (generate seed template from pack `secret_requirements`), `wizard` (fill seeds interactively or from dotenv), `apply` (apply seeds to dev store or broker HTTP with optional requirement validation), and `init` (orchestrates dev up + ctx + scaffold + wizard + apply). Uses seed/apply helpers from core and reads pack metadata as JSON/YAML or `.gtpack` zip containing `secret_requirements`.  
-  **Key dependencies / integration points:** Depends on core/spec (dev-store feature), serde, clap, zip; uses file-based dev provider path `.greentic/dev/.dev.secrets.env` by default; can target broker HTTP endpoints.
+  **Key functionality:** Commands for `dev up/down`, `ctx set/show`, `scaffold`, `wizard`, `apply`, `init`, plus `config show/explain`. Uses seed/apply helpers from core and reads pack metadata as JSON/YAML or `.gtpack`. Resolves config via `greentic-config` (precedence CLI/env/project/user/defaults), uses config paths for ctx/dev store, respects dev defaults, and applies network settings to broker HTTP calls.  
+  **Key dependencies / integration points:** Depends on core/spec (dev-store feature), `greentic-config`, serde, clap, zip, reqwest; default dev store under `paths.state_dir`.
 - **Path:** `greentic-secrets`  
   **Role:** Umbrella crate re-exporting core/spec/api and optional providers.  
   **Key functionality:** Simplifies downstream dependency management; re-exports spec requirement/seed types and core seed/apply helpers; enables provider features through a single crate.
@@ -75,5 +83,5 @@
 - AWS provider test auto-skips when native root certs are unavailable (prints a warning but does not fail).
 
 ## 5. Notes for Future Work
-- Consider running `cargo test --workspace` (and provider-specific suites with required env/backends) to verify integrations beyond `greentic-secrets-core`.
+- Extend greentic-config adoption across other binaries/services (telemetry init, service-specific endpoints) and align env var shims with the shared schema if new fields are added.
 - Keep `.env`/emulator configuration aligned with `make e2e` targets for AWS/Azure/Vault to ensure conformance coverage.

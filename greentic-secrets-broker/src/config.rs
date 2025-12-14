@@ -7,9 +7,9 @@ pub struct BackendComponents {
     pub key_provider: Box<dyn KeyProvider>,
 }
 
-pub async fn load_backend_components() -> Result<BackendComponents> {
-    let backend_kind = std::env::var("SECRETS_BACKEND").unwrap_or_else(|_| "dev".into());
-    match backend_kind.as_str() {
+pub async fn load_backend_components(backend_kind: &str) -> Result<BackendComponents> {
+    let kind = std::env::var("SECRETS_BACKEND").unwrap_or_else(|_| backend_kind.to_string());
+    match kind.as_str() {
         "dev" => dev_backend().await,
         "aws" => {
             #[cfg(feature = "aws-sm")]

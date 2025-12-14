@@ -14,6 +14,9 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use auth::Authorizer;
+use greentic_config_types::{
+    NetworkConfig, PathsConfig, SecretsBackendRefConfig, TelemetryConfig, TelemetryExporter,
+};
 use secrets_core::SecretsBroker;
 use secrets_core::crypto::dek_cache::DekCache;
 use secrets_core::crypto::envelope::EnvelopeService;
@@ -25,9 +28,21 @@ use tracing::{info, warn};
 pub use state::AppState;
 pub use telemetry::CorrelationId;
 
-pub async fn run() -> anyhow::Result<()> {
-    let config = BrokerConfig::from_env();
-    let state = build_state().await?;
+#[derive(Clone)]
+pub struct BrokerRuntimeConfig {
+    pub http_addr: SocketAddr,
+    pub nats_url: Option<String>,
+    pub network: NetworkConfig,
+    pub telemetry: TelemetryConfig,
+    pub paths: PathsConfig,
+    pub secrets: SecretsBackendRefConfig,
+}
+
+pub async fn run(config: BrokerRuntimeConfig) -> anyhow::Result<()> {
+    apply_network_env(&config.network);
+    apply_telemetry_env(&config.telemetry);
+
+    let state = build_state_with_backend(&config.secrets).await?;
 
     let http_listener = TcpListener::bind(config.http_addr).await.with_context(|| {
         format!(
@@ -69,29 +84,15 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Clone)]
-pub struct BrokerConfig {
-    pub http_addr: SocketAddr,
-    pub nats_url: Option<String>,
-}
-
-impl BrokerConfig {
-    pub fn from_env() -> Self {
-        let bind = std::env::var("BROKER__BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0:8080".into());
-        let nats_url = std::env::var("BROKER__NATS_URL").ok();
-        let http_addr = bind
-            .parse()
-            .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 8080)));
-        Self {
-            http_addr,
-            nats_url,
-        }
-    }
-}
-
 pub async fn build_state() -> anyhow::Result<AppState> {
+    build_state_with_backend(&SecretsBackendRefConfig::default()).await
+}
+
+pub async fn build_state_with_backend(
+    backend: &SecretsBackendRefConfig,
+) -> anyhow::Result<AppState> {
     let authorizer = Authorizer::from_env().await?;
-    let components = config::load_backend_components().await?;
+    let components = config::load_backend_components(&backend.kind).await?;
     let crypto = EnvelopeService::new(
         components.key_provider,
         DekCache::from_env(),
@@ -102,6 +103,68 @@ pub async fn build_state() -> anyhow::Result<AppState> {
         Arc::new(Mutex::new(broker)),
         Arc::new(authorizer),
     ))
+}
+
+fn apply_network_env(network: &NetworkConfig) {
+    if let Some(proxy) = &network.proxy {
+        unsafe {
+            std::env::set_var("HTTPS_PROXY", proxy);
+            std::env::set_var("HTTP_PROXY", proxy);
+        }
+    }
+    if let Some(no_proxy) = &network.no_proxy {
+        unsafe {
+            std::env::set_var("NO_PROXY", no_proxy);
+        }
+    }
+    if network.offline {
+        unsafe {
+            std::env::set_var("GREENTIC_OFFLINE", "1");
+        }
+    }
+    if matches!(
+        network.tls.mode,
+        greentic_config_types::TlsMode::InsecureSkipVerify
+    ) {
+        unsafe {
+            std::env::set_var("GREENTIC_TLS_INSECURE", "1");
+        }
+    }
+}
+
+fn apply_telemetry_env(telemetry: &TelemetryConfig) {
+    if !telemetry.enabled {
+        unsafe {
+            std::env::set_var("OTEL_TRACES_EXPORTER", "none");
+            std::env::set_var("OTEL_METRICS_EXPORTER", "none");
+        }
+        return;
+    }
+
+    if let Some(endpoint) = &telemetry.endpoint {
+        unsafe {
+            std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint);
+        }
+    }
+    if let Some(sampling) = telemetry.sampling {
+        unsafe {
+            std::env::set_var("OTEL_TRACES_SAMPLER", "parentbased_traceidratio");
+            std::env::set_var("OTEL_TRACES_SAMPLER_ARG", sampling.to_string());
+        }
+    }
+    if let Some(exporter) = &telemetry.exporter {
+        match exporter {
+            TelemetryExporter::Otlp => unsafe {
+                std::env::set_var("OTEL_TRACES_EXPORTER", "otlp");
+                std::env::set_var("OTEL_METRICS_EXPORTER", "otlp");
+            },
+            TelemetryExporter::None => unsafe {
+                std::env::set_var("OTEL_TRACES_EXPORTER", "none");
+                std::env::set_var("OTEL_METRICS_EXPORTER", "none");
+            },
+            _ => {}
+        }
+    }
 }
 
 async fn shutdown_signal() {

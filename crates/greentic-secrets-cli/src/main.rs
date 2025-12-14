@@ -1,24 +1,55 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use clap::{Args, Parser, Subcommand};
+use greentic_config::{CliOverrides as ConfigOverrides, ConfigResolver, ResolvedConfig};
+use greentic_config_types::{GreenticConfig, NetworkConfig, TlsMode};
 use greentic_secrets_core::seed::{
     ApplyOptions, ApplyReport, DevContext, DevStore, HttpStore, SecretsStore, apply_seed,
     resolve_uri,
 };
 use greentic_secrets_spec::{SecretFormat, SecretRequirement, SeedDoc, SeedEntry, SeedValue};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use zip::ZipArchive;
 
 #[derive(Parser)]
 #[command(name = "greentic-secrets", version, about = "Greentic secrets CLI")]
 struct Cli {
+    #[command(flatten)]
+    config: GlobalConfigOpts,
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Args, Default)]
+struct GlobalConfigOpts {
+    /// Override config file path (replaces project config)
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Override environment id
+    #[arg(long)]
+    env: Option<String>,
+    /// Override tenant id
+    #[arg(long)]
+    tenant: Option<String>,
+    /// Override team id
+    #[arg(long)]
+    team: Option<String>,
+    /// Override greentic root directory
+    #[arg(long)]
+    greentic_root: Option<PathBuf>,
+    /// Override state directory
+    #[arg(long)]
+    state_dir: Option<PathBuf>,
+    /// Verbose output (prints config source)
+    #[arg(long)]
+    verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -31,6 +62,14 @@ enum Command {
     Wizard(WizardCmd),
     Apply(ApplyCmd),
     Init(InitCmd),
+    #[command(subcommand)]
+    Config(ConfigCmd),
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    Show,
+    Explain,
 }
 
 #[derive(Subcommand)]
@@ -135,31 +174,80 @@ struct CtxFile {
     team: Option<String>,
 }
 
+#[derive(Default)]
+struct CtxOverrides {
+    env: Option<String>,
+    tenant: Option<String>,
+    team: Option<String>,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let resolved = resolve_config(&cli)?;
+    if cli.config.verbose {
+        println!(
+            "config loaded (root={}, state_dir={}, sources={:?})",
+            resolved.config.paths.greentic_root.display(),
+            resolved.config.paths.state_dir.display(),
+            resolved.provenance
+        );
+        for warning in &resolved.warnings {
+            eprintln!("warning: {warning}");
+        }
+    }
+
     match cli.command {
-        Command::Dev(cmd) => handle_dev(cmd),
-        Command::Ctx(cmd) => handle_ctx(cmd),
-        Command::Scaffold(cmd) => handle_scaffold(cmd),
-        Command::Wizard(cmd) => handle_wizard(cmd),
-        Command::Apply(cmd) => handle_apply(cmd),
-        Command::Init(cmd) => handle_init(cmd),
+        Command::Dev(cmd) => handle_dev(cmd, &resolved.config),
+        Command::Ctx(cmd) => handle_ctx(cmd, &resolved.config),
+        Command::Scaffold(cmd) => handle_scaffold(cmd, &resolved),
+        Command::Wizard(cmd) => handle_wizard(cmd, &resolved),
+        Command::Apply(cmd) => handle_apply(cmd, &resolved),
+        Command::Init(cmd) => handle_init(cmd, &resolved),
+        Command::Config(cmd) => handle_config_cmd(cmd, &resolved),
     }
 }
 
-fn handle_dev(cmd: DevCmd) -> Result<()> {
+fn resolve_config(cli: &Cli) -> Result<ResolvedConfig> {
+    let overrides = ConfigOverrides {
+        config_path: cli.config.config.clone(),
+        env: cli.config.env.clone(),
+        tenant: cli.config.tenant.clone(),
+        team: cli.config.team.clone(),
+        state_dir: cli.config.state_dir.clone(),
+        greentic_root: cli.config.greentic_root.clone(),
+    };
+    ConfigResolver::new().with_cli_overrides(overrides).load()
+}
+
+fn handle_config_cmd(cmd: ConfigCmd, resolved: &ResolvedConfig) -> Result<()> {
     match cmd {
-        DevCmd::Up { store_path } => {
-            let path = store_path.unwrap_or_else(default_store_path);
+        ConfigCmd::Show => {
+            println!("{}", toml::to_string_pretty(&resolved.config)?);
+        }
+        ConfigCmd::Explain => {
+            let report = resolved.explain();
+            println!("{report}");
+        }
+    }
+    Ok(())
+}
+
+fn handle_dev(cmd: DevCmd, cfg: &GreenticConfig) -> Result<()> {
+    let store_path = dev_store_path(cfg);
+    match cmd {
+        DevCmd::Up {
+            store_path: override_path,
+        } => {
+            let path = override_path.unwrap_or_else(|| store_path.clone());
             ensure_parent(&path)?;
             let _store = DevStore::with_path(&path).context("failed to prepare dev store")?;
             println!("Dev store ready at {}", path.display());
         }
         DevCmd::Down {
             destroy,
-            store_path,
+            store_path: override_path,
         } => {
-            let path = store_path.unwrap_or_else(default_store_path);
+            let path = override_path.unwrap_or(store_path);
             if destroy && path.exists() {
                 fs::remove_file(&path).context("failed to remove dev store")?;
                 println!("Removed dev store {}", path.display());
@@ -174,7 +262,8 @@ fn handle_dev(cmd: DevCmd) -> Result<()> {
     Ok(())
 }
 
-fn handle_ctx(cmd: CtxCmd) -> Result<()> {
+fn handle_ctx(cmd: CtxCmd, cfg: &GreenticConfig) -> Result<()> {
+    let path = ctx_path(cfg);
     match cmd {
         CtxCmd::Set(args) => {
             let ctx = CtxFile {
@@ -182,11 +271,11 @@ fn handle_ctx(cmd: CtxCmd) -> Result<()> {
                 tenant: args.tenant,
                 team: args.team,
             };
-            write_ctx(&ctx)?;
-            println!("Context saved to {}", ctx_path().display());
+            write_ctx(&ctx, &path)?;
+            println!("Context saved to {}", path.display());
         }
         CtxCmd::Show => {
-            let ctx = read_ctx().context("ctx not set; run ctx set")?;
+            let ctx = read_ctx(&path).context("ctx not set; run ctx set")?;
             println!("env={}", ctx.env);
             println!("tenant={}", ctx.tenant);
             println!("team={}", ctx.team.as_deref().unwrap_or("_"));
@@ -195,8 +284,17 @@ fn handle_ctx(cmd: CtxCmd) -> Result<()> {
     Ok(())
 }
 
-fn handle_scaffold(cmd: ScaffoldCmd) -> Result<()> {
-    let ctx = resolve_ctx(cmd.env, cmd.tenant, cmd.team)?;
+fn handle_scaffold(cmd: ScaffoldCmd, resolved: &ResolvedConfig) -> Result<()> {
+    let ctx_file = read_ctx(&ctx_path(&resolved.config)).ok();
+    let ctx = resolve_ctx(
+        &resolved.config,
+        ctx_file.as_ref(),
+        &CtxOverrides {
+            env: cmd.env.clone(),
+            tenant: cmd.tenant.clone(),
+            team: cmd.team.clone(),
+        },
+    )?;
     let requirements = read_pack_requirements(&cmd.pack)?;
     let entries = requirements
         .iter()
@@ -208,7 +306,7 @@ fn handle_scaffold(cmd: ScaffoldCmd) -> Result<()> {
     Ok(())
 }
 
-fn handle_wizard(cmd: WizardCmd) -> Result<()> {
+fn handle_wizard(cmd: WizardCmd, _resolved: &ResolvedConfig) -> Result<()> {
     let mut doc = read_seed(&cmd.input)?;
     let dotenv = if let Some(path) = cmd.from_dotenv.as_ref() {
         Some(read_dotenv(path)?)
@@ -246,19 +344,33 @@ fn handle_wizard(cmd: WizardCmd) -> Result<()> {
     Ok(())
 }
 
-fn handle_apply(cmd: ApplyCmd) -> Result<()> {
+fn handle_apply(cmd: ApplyCmd, resolved: &ResolvedConfig) -> Result<()> {
     let seed = read_seed(&cmd.file)?;
     let requirements = match cmd.pack {
         Some(path) => Some(read_pack_requirements(&path)?),
         None => None,
     };
-    let store: Box<dyn SecretsStore> = if let Some(url) = cmd.broker_url {
-        Box::new(HttpStore::new(url, cmd.token))
-    } else {
-        Box::new(
-            DevStore::with_path(cmd.store_path.unwrap_or_else(default_store_path))
+    let store: Box<dyn SecretsStore> = match cmd.broker_url {
+        Some(url) => {
+            ensure_online(&resolved.config.network, "broker apply")?;
+            let client = build_http_client(&resolved.config.network)?;
+            Box::new(HttpStore::with_client(client, url, cmd.token))
+        }
+        None => {
+            if resolved.config.secrets.kind != "dev" {
+                anyhow::bail!(
+                    "secrets.kind={} requires --broker-url (or set secrets.kind=dev)",
+                    resolved.config.secrets.kind
+                );
+            }
+            Box::new(
+                DevStore::with_path(
+                    cmd.store_path
+                        .unwrap_or_else(|| dev_store_path(&resolved.config)),
+                )
                 .context("failed to open dev store")?,
-        )
+            )
+        }
     };
     let options = ApplyOptions {
         requirements: requirements.as_deref(),
@@ -275,23 +387,27 @@ fn handle_apply(cmd: ApplyCmd) -> Result<()> {
     }
 }
 
-fn handle_init(cmd: InitCmd) -> Result<()> {
-    handle_dev(DevCmd::Up {
-        store_path: cmd.store_path.clone(),
-    })?;
+fn handle_init(cmd: InitCmd, resolved: &ResolvedConfig) -> Result<()> {
+    handle_dev(
+        DevCmd::Up {
+            store_path: cmd.store_path.clone(),
+        },
+        &resolved.config,
+    )?;
 
-    if read_ctx().is_err() {
-        let env = match cmd.env.clone() {
-            Some(value) => value,
-            None => prompt("env")?,
-        };
-        let tenant = match cmd.tenant.clone() {
-            Some(value) => value,
-            None => prompt("tenant")?,
-        };
-        let team = cmd.team.clone();
-        write_ctx(&CtxFile { env, tenant, team })?;
-        println!("Context written to {}", ctx_path().display());
+    let ctx_file_path = ctx_path(&resolved.config);
+    if read_ctx(&ctx_file_path).is_err() {
+        let ctx = resolve_ctx(
+            &resolved.config,
+            None,
+            &CtxOverrides {
+                env: cmd.env.clone(),
+                tenant: cmd.tenant.clone(),
+                team: cmd.team.clone(),
+            },
+        )?;
+        write_ctx(&ctx, &ctx_file_path)?;
+        println!("Context written to {}", ctx_file_path.display());
     }
 
     let seed_out = cmd
@@ -299,37 +415,49 @@ fn handle_init(cmd: InitCmd) -> Result<()> {
         .clone()
         .unwrap_or_else(|| PathBuf::from("seeds.yaml"));
 
-    handle_scaffold(ScaffoldCmd {
-        pack: cmd.pack.clone(),
-        out: seed_out.clone(),
-        env: cmd.env.clone(),
-        tenant: cmd.tenant.clone(),
-        team: cmd.team.clone(),
-    })?;
+    handle_scaffold(
+        ScaffoldCmd {
+            pack: cmd.pack.clone(),
+            out: seed_out.clone(),
+            env: cmd.env.clone(),
+            tenant: cmd.tenant.clone(),
+            team: cmd.team.clone(),
+        },
+        resolved,
+    )?;
 
     if cmd.non_interactive {
-        handle_wizard(WizardCmd {
-            input: seed_out.clone(),
-            output: seed_out.clone(),
-            from_dotenv: cmd.from_dotenv.clone(),
-            non_interactive: true,
-        })?;
+        handle_wizard(
+            WizardCmd {
+                input: seed_out.clone(),
+                output: seed_out.clone(),
+                from_dotenv: cmd.from_dotenv.clone(),
+                non_interactive: true,
+            },
+            resolved,
+        )?;
     } else {
-        handle_wizard(WizardCmd {
-            input: seed_out.clone(),
-            output: seed_out.clone(),
-            from_dotenv: cmd.from_dotenv.clone(),
-            non_interactive: false,
-        })?;
+        handle_wizard(
+            WizardCmd {
+                input: seed_out.clone(),
+                output: seed_out.clone(),
+                from_dotenv: cmd.from_dotenv.clone(),
+                non_interactive: false,
+            },
+            resolved,
+        )?;
     }
 
-    handle_apply(ApplyCmd {
-        file: seed_out,
-        pack: Some(cmd.pack),
-        store_path: cmd.store_path,
-        broker_url: cmd.broker_url,
-        token: cmd.token,
-    })
+    handle_apply(
+        ApplyCmd {
+            file: seed_out,
+            pack: Some(cmd.pack),
+            store_path: cmd.store_path,
+            broker_url: cmd.broker_url,
+            token: cmd.token,
+        },
+        resolved,
+    )
 }
 
 fn scaffold_entry(ctx: &CtxFile, req: &SecretRequirement) -> SeedEntry {
@@ -414,16 +542,14 @@ fn write_seed(doc: &SeedDoc, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_ctx() -> Result<CtxFile> {
-    let path = ctx_path();
-    let bytes = fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
+fn read_ctx(path: &Path) -> Result<CtxFile> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let text = String::from_utf8(bytes)?;
     parse_ctx(&text).context("invalid ctx file")
 }
 
-fn write_ctx(ctx: &CtxFile) -> Result<()> {
-    let path = ctx_path();
-    ensure_parent(&path)?;
+fn write_ctx(ctx: &CtxFile, path: &Path) -> Result<()> {
+    ensure_parent(path)?;
     let data = format!(
         "env = \"{}\"\ntenant = \"{}\"\nteam = {}\n",
         ctx.env,
@@ -433,7 +559,7 @@ fn write_ctx(ctx: &CtxFile) -> Result<()> {
             .map(|t| format!("\"{t}\""))
             .unwrap_or_else(|| "null".into())
     );
-    fs::write(&path, data)?;
+    fs::write(path, data)?;
     Ok(())
 }
 
@@ -461,41 +587,74 @@ fn parse_ctx(raw: &str) -> Option<CtxFile> {
 }
 
 fn resolve_ctx(
-    env: Option<String>,
-    tenant: Option<String>,
-    team: Option<String>,
+    cfg: &GreenticConfig,
+    ctx_file: Option<&CtxFile>,
+    overrides: &CtxOverrides,
 ) -> Result<CtxFile> {
-    if env.is_some() || tenant.is_some() || team.is_some() {
-        let ctx = CtxFile {
-            env: env.unwrap_or_default(),
-            tenant: tenant.unwrap_or_default(),
-            team,
-        };
-        if ctx.env.is_empty() || ctx.tenant.is_empty() {
-            anyhow::bail!("env and tenant must be provided");
-        }
-        return Ok(ctx);
-    }
-    read_ctx().context("ctx missing; pass --env/--tenant or run ctx set")
+    let env = overrides
+        .env
+        .clone()
+        .or_else(|| ctx_file.map(|c| c.env.clone()))
+        .or_else(|| cfg.dev.as_ref().map(|d| d.default_env.to_string()))
+        .or_else(|| Some(cfg.environment.env_id.to_string()))
+        .ok_or_else(|| anyhow::anyhow!("env must be provided"))?;
+
+    let tenant = overrides
+        .tenant
+        .clone()
+        .or_else(|| ctx_file.map(|c| c.tenant.clone()))
+        .or_else(|| cfg.dev.as_ref().map(|d| d.default_tenant.clone()))
+        .ok_or_else(|| anyhow::anyhow!("tenant must be provided"))?;
+
+    let team = overrides
+        .team
+        .clone()
+        .or_else(|| ctx_file.and_then(|c| c.team.clone()))
+        .or_else(|| cfg.dev.as_ref().and_then(|d| d.default_team.clone()));
+
+    Ok(CtxFile { env, tenant, team })
 }
 
-fn ctx_path() -> PathBuf {
-    greentic_dir().join("secrets.toml")
+fn ctx_path(cfg: &GreenticConfig) -> PathBuf {
+    cfg.paths.state_dir.join("secrets.toml")
 }
 
-fn greentic_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".greentic")
-}
-
-fn default_store_path() -> PathBuf {
-    greentic_dir().join("dev/.dev.secrets.env")
+fn dev_store_path(cfg: &GreenticConfig) -> PathBuf {
+    cfg.paths.state_dir.join("dev/.dev.secrets.env")
 }
 
 fn ensure_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+    }
+    Ok(())
+}
+
+fn build_http_client(network: &NetworkConfig) -> Result<Client> {
+    let mut builder = Client::builder();
+    if let Some(proxy) = &network.proxy {
+        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
+    }
+    if let Some(no_proxy) = &network.no_proxy {
+        unsafe {
+            std::env::set_var("NO_PROXY", no_proxy);
+        }
+    }
+    if let Some(connect_timeout) = network.connect_timeout_ms {
+        builder = builder.connect_timeout(Duration::from_millis(connect_timeout));
+    }
+    if let Some(timeout) = network.request_timeout_ms {
+        builder = builder.timeout(Duration::from_millis(timeout));
+    }
+    if matches!(network.tls.mode, TlsMode::InsecureSkipVerify) {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    builder.build().map_err(Into::into)
+}
+
+fn ensure_online(network: &NetworkConfig, activity: &str) -> Result<()> {
+    if network.offline {
+        bail!("network.offline=true; cannot perform network operation ({activity})");
     }
     Ok(())
 }
@@ -559,14 +718,6 @@ fn print_report(report: &ApplyReport) {
             println!("- {}: {}", failure.uri, failure.error);
         }
     }
-}
-
-fn prompt(label: &str) -> Result<String> {
-    print!("{label}: ");
-    io::stdout().flush().ok();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim().to_string())
 }
 
 fn looks_like_zip(bytes: &[u8]) -> bool {

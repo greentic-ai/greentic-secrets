@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/greentic-config",
+    "crates/greentic-config-types",
     "greentic-secrets-api",
     "greentic-secrets-spec",
     "greentic-secrets-core",
@@ -21,7 +23,7 @@ resolver = "2"
 edition = "2024"
 rust-version = "1"
 license = "MIT"
-version = "0.4.5"
+version = "0.4.6"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -56,6 +58,7 @@ serial_test = "3"
 sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
+toml = "0.9"
 time = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
 tower = "0.5"
@@ -64,7 +67,7 @@ tracing = "0.1"
 greentic-types = { version = "0.4", features = ["telemetry-autoinit"] }
 url = "2"
 uuid = "1"
-wit-bindgen = "0.48"
+wit-bindgen = "0.49"
 greentic_secrets_api = { package = "greentic-secrets-api", version = "0.4", path = "greentic-secrets-api" }
 greentic_secrets_spec = { package = "greentic-secrets-spec", version = "0.4", path = "greentic-secrets-spec" }
 greentic_secrets_core = { package = "greentic-secrets-core", version = "0.4", path = "greentic-secrets-core" }
@@ -88,3 +91,5 @@ greentic_secrets_provider_azure = { package = "greentic-secrets-provider-azure-k
 greentic_secrets_provider_gcp = { package = "greentic-secrets-provider-gcp-sm", version = "0.4", path = "providers/greentic-gcp-sm" }
 greentic_secrets_provider_vault = { package = "greentic-secrets-provider-vault-kv", version = "0.4", path = "providers/greentic-vault-kv" }
 greentic_secrets_provider_dev_env = { package = "greentic-secrets-provider-dev", version = "0.4", path = "providers/greentic-dev" }
+greentic-config-types = { path = "crates/greentic-config-types" }
+greentic-config = { path = "crates/greentic-config" }

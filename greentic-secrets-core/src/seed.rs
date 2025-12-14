@@ -265,8 +265,12 @@ pub struct HttpStore {
 
 impl HttpStore {
     pub fn new(base_url: impl Into<String>, token: Option<String>) -> Self {
+        Self::with_client(Client::new(), base_url, token)
+    }
+
+    pub fn with_client(client: Client, base_url: impl Into<String>, token: Option<String>) -> Self {
         Self {
-            client: Client::new(),
+            client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             token,
         }

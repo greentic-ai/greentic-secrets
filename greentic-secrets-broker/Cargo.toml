@@ -36,6 +36,8 @@ tower = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 tracing = { workspace = true }
 greentic-types = { workspace = true }
+greentic-config = { workspace = true }
+greentic-config-types = { workspace = true }
 secrets-core = { workspace = true }
 secrets-provider-dev = { workspace = true }
 secrets-provider-aws-sm = { workspace = true, optional = true }

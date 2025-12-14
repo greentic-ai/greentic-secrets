@@ -1,4 +1,28 @@
+use clap::Parser;
+use greentic_config::{CliOverrides as ConfigOverrides, ConfigResolver};
+use greentic_config_types::SecretsBackendRefConfig;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process;
+
+#[derive(Parser)]
+struct BrokerArgs {
+    /// Override config file path
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Override environment id
+    #[arg(long)]
+    env: Option<String>,
+    /// Override bind address
+    #[arg(long)]
+    bind: Option<String>,
+    /// Override NATS URL
+    #[arg(long)]
+    nats_url: Option<String>,
+    /// Verbose output
+    #[arg(long)]
+    verbose: bool,
+}
 
 #[greentic_types::telemetry::main(service_name = "greentic-secrets-broker")]
 async fn main() {
@@ -9,5 +33,59 @@ async fn main() {
 }
 
 async fn real_main() -> anyhow::Result<()> {
-    secrets_broker::run().await
+    let args = BrokerArgs::parse();
+    let overrides = ConfigOverrides {
+        config_path: args.config.clone(),
+        env: args.env.clone(),
+        ..Default::default()
+    };
+    let resolved = ConfigResolver::new().with_cli_overrides(overrides).load()?;
+    if args.verbose {
+        println!(
+            "config loaded (root={}, state_dir={}, sources={:?})",
+            resolved.config.paths.greentic_root.display(),
+            resolved.config.paths.state_dir.display(),
+            resolved.provenance
+        );
+        for warning in &resolved.warnings {
+            eprintln!("warning: {warning}");
+        }
+    }
+
+    let runtime_config = broker_runtime_config(&resolved, &args);
+    secrets_broker::run(runtime_config).await
+}
+
+fn broker_runtime_config(
+    resolved: &greentic_config::ResolvedConfig,
+    args: &BrokerArgs,
+) -> secrets_broker::BrokerRuntimeConfig {
+    let bind = args
+        .bind
+        .clone()
+        .or_else(|| std::env::var("BROKER__BIND_ADDRESS").ok())
+        .unwrap_or_else(|| "0.0.0.0:8080".into());
+    let nats_url = args
+        .nats_url
+        .clone()
+        .or_else(|| std::env::var("BROKER__NATS_URL").ok());
+    let secrets = SecretsBackendRefConfig {
+        kind: std::env::var("SECRETS_BACKEND")
+            .ok()
+            .unwrap_or_else(|| resolved.config.secrets.kind.clone()),
+        profile: resolved.config.secrets.profile.clone(),
+        endpoint: resolved.config.secrets.endpoint.clone(),
+    };
+    let http_addr = bind
+        .parse()
+        .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 8080)));
+
+    secrets_broker::BrokerRuntimeConfig {
+        http_addr,
+        nats_url,
+        network: resolved.config.network.clone(),
+        telemetry: resolved.config.telemetry.clone(),
+        paths: resolved.config.paths.clone(),
+        secrets,
+    }
 }
