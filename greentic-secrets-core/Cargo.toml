@@ -12,7 +12,7 @@ categories = ["config", "authentication", "cryptography"]
 include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
 [features]
-default = ["use_spec", "crypto-ring"]
+default = ["use_spec", "crypto-ring", "dev-store"]
 use_spec = []
 crypto-ring = ["dep:ring"]
 crypto-none = []
@@ -25,6 +25,8 @@ azure = []
 imds = []
 nats = ["dep:async-nats", "dep:futures"]
 schema = ["schemars", "greentic_secrets_spec/schema"]
+schema-validate = ["dep:jsonschema"]
+dev-store = ["dep:greentic_secrets_provider_dev"]
 
 xchacha = []
 
@@ -50,12 +52,15 @@ once_cell = { workspace = true }
 anyhow = { workspace = true }
 url = { workspace = true }
 greentic-types = { workspace = true }
-
+async-trait = { workspace = true }
+jsonschema = { version = "0.17", optional = true }
+greentic_secrets_provider_dev = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 wit-bindgen = { workspace = true }
 greentic-types = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lib]
 name = "secrets_core"

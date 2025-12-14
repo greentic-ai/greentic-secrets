@@ -661,6 +661,7 @@ fn list_versions_unsupported(err: &SdkError<ListSecretVersionIdsError>) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustls_native_certs::load_native_certs;
     use serial_test::serial;
     use std::env;
 
@@ -689,9 +690,23 @@ mod tests {
         clear_env("AWS_PROFILE");
     }
 
+    fn native_roots_available() -> bool {
+        let certs = load_native_certs();
+        if certs.certs.is_empty() {
+            eprintln!("native root certs unavailable: {:?}", certs.errors);
+            return false;
+        }
+        true
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn aws_provider_ok_under_tokio() {
+        if !native_roots_available() {
+            eprintln!("skipping aws_provider_ok_under_tokio: no native root certs");
+            return;
+        }
+
         setup_env();
         let BackendComponents { backend, .. } = build_backend()
             .await

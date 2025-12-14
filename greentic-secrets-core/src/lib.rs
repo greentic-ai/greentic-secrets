@@ -16,6 +16,7 @@ pub mod provider;
 pub mod provider_secrets;
 pub mod resolver;
 pub mod rt;
+pub mod seed;
 pub mod signing_keys;
 pub mod spec;
 pub mod spec_compat;
@@ -56,6 +57,12 @@ pub use provider_secrets::{
     get_messaging_adapter_secret, messaging_adapter_secret_uri, ttl_duration, ttl_seconds,
 };
 pub use resolver::{DefaultResolver, ResolverConfig};
+#[cfg(feature = "dev-store")]
+pub use seed::DevStore;
+pub use seed::{
+    ApplyFailure, ApplyOptions, ApplyReport, BrokerStore, DevContext, HttpStore,
+    NormalizedSeedEntry, SecretsStore, apply_seed, resolve_uri,
+};
 pub use signing_keys::{SigningPurpose, get_signing_key_ref, signing_key_ref_uri};
 pub use spec::{SecretDescribable, SecretSpec};
 pub use types::{

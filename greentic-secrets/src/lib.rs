@@ -3,6 +3,9 @@ pub use greentic_secrets_core::api_keys;
 pub use greentic_secrets_core::provider_secrets;
 pub use greentic_secrets_core::signing_keys;
 pub use greentic_secrets_spec as spec;
+pub use greentic_secrets_spec::{
+    SecretFormat, SecretKey, SecretRequirement, SecretScope, SeedDoc, SeedEntry, SeedValue,
+};
 
 pub use greentic_secrets_api::*;
 
@@ -24,3 +27,10 @@ pub use greentic_secrets_provider_gcp as gcp;
 pub use greentic_secrets_provider_k8s as k8s;
 #[cfg(feature = "providers-vault")]
 pub use greentic_secrets_provider_vault as vault;
+
+#[cfg(feature = "providers-dev")]
+pub use greentic_secrets_core::seed::DevStore;
+pub use greentic_secrets_core::seed::{
+    ApplyFailure, ApplyOptions, ApplyReport, BrokerStore, DevContext, NormalizedSeedEntry,
+    SecretsStore, apply_seed, resolve_uri,
+};

@@ -14,12 +14,17 @@ include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 [features]
 default = ["std", "serde"]
 std = []
-serde = ["dep:serde"]
+serde = ["dep:serde", "dep:serde_json"]
 schema = ["dep:schemars"]
 
 [dependencies]
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 time = { workspace = true }
 schemars = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_yaml = "0.9"
+serde_json = { workspace = true }

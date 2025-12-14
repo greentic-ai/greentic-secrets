@@ -13,6 +13,7 @@ members = [
     "providers/greentic-azure-kv",
     "providers/greentic-k8s",
     "providers/greentic-vault-kv",
+    "crates/greentic-secrets-cli",
 ]
 resolver = "2"
 
@@ -20,7 +21,7 @@ resolver = "2"
 edition = "2024"
 rust-version = "1"
 license = "MIT"
-version = "0.4.4"
+version = "0.4.5"
 
 [workspace.dependencies]
 anyhow = "1"

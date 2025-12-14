@@ -29,3 +29,4 @@ serde_json = { workspace = true }
 [dev-dependencies]
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+rustls-native-certs = "0.8"
