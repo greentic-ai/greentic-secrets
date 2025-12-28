@@ -648,7 +648,7 @@ fn build_http_client(network: &NetworkConfig) -> Result<Client> {
         builder = builder.timeout(Duration::from_millis(timeout));
     }
     if matches!(network.tls.mode, TlsMode::InsecureSkipVerify) {
-        builder = builder.danger_accept_invalid_certs(true);
+        bail!("tls.insecure_skip_verify is not permitted");
     }
     builder.build().map_err(Into::into)
 }

@@ -6,7 +6,7 @@
 //! string. The provider also integrates with Vault Transit to wrap and unwrap
 //! data encryption keys.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use greentic_secrets_core::rt::sync_await;
 use greentic_secrets_spec::{
@@ -498,7 +498,7 @@ impl VaultProviderConfig {
             builder = builder.add_root_certificate(cert);
         }
         if self.insecure_skip_tls {
-            builder = builder.danger_accept_invalid_certs(true);
+            bail!("VAULT_INSECURE_SKIP_TLS is not permitted");
         }
         builder.build().context("failed to build Vault HTTP client")
     }

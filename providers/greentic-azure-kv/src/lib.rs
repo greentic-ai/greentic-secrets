@@ -7,7 +7,7 @@
 
 mod auth;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use greentic_secrets_core::{
     http::{Http, HttpBuilder, HttpResponse},
@@ -19,7 +19,7 @@ use greentic_secrets_spec::{
 };
 use reqwest::{
     Client, Method, StatusCode,
-    header::{AUTHORIZATION, HeaderMap, HeaderValue},
+    header::{AUTHORIZATION, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -28,7 +28,6 @@ use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::warn;
 use url::Url;
 
 use auth::{AuthError, KvAuthConfig, request_access_token};
@@ -110,7 +109,11 @@ impl AzureProviderConfig {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "True"))
-            .unwrap_or_else(|| uri_uses_loopback_host(&vault_uri));
+            .unwrap_or(false);
+
+        if tls_insecure_skip_verify {
+            bail!("AZURE_KEYVAULT_INSECURE_SKIP_VERIFY is not permitted");
+        }
 
         let auth_mode = if let Some(token) = static_token {
             AzureAuthMode::StaticToken { bearer: token }
@@ -154,10 +157,6 @@ impl AzureProviderConfig {
             .map(|value| Url::parse(&value).context("invalid Azure proxy URL"))
             .transpose()?;
 
-        if tls_insecure_skip_verify {
-            warn!("Azure Key Vault TLS verification disabled; do not use in production.");
-        }
-
         Ok(Self {
             vault_uri: vault_uri.trim_end_matches('/').to_string(),
             secret_prefix,
@@ -179,16 +178,7 @@ impl AzureProviderConfig {
     }
 
     fn build_kv_http(&self) -> Result<Http> {
-        let mut builder = self.base_http_builder();
-        if self.tls_insecure_skip_verify {
-            let mut headers = HeaderMap::new();
-            headers.insert("x-ms-keyvault-region", HeaderValue::from_static("local"));
-            headers.insert(
-                "x-ms-keyvault-service-version",
-                HeaderValue::from_static("1.6.0.0"),
-            );
-            builder = builder.default_headers(headers);
-        }
+        let builder = self.base_http_builder();
         builder.build()
     }
 

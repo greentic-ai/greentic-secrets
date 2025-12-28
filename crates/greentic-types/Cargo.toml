@@ -60,6 +60,7 @@ serde = [
 std = []
 telemetry-autoinit = [
     "std",
+    "dep:anyhow",
     "dep:greentic-telemetry",
     "dep:tracing",
     "dep:tracing-subscriber",

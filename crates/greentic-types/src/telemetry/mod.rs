@@ -9,16 +9,19 @@ pub use keys::OtlpKeys;
 pub use span_context::SpanContext;
 
 #[cfg(feature = "telemetry-autoinit")]
-use alloc::{boxed::Box, vec::Vec};
-#[cfg(feature = "telemetry-autoinit")]
 use greentic_telemetry::set_current_telemetry_ctx;
 #[cfg(feature = "telemetry-autoinit")]
-use tracing_subscriber::{Registry, layer::Layer};
+use tracing_subscriber::prelude::*;
 
 #[cfg(feature = "telemetry-autoinit")]
-pub use greentic_telemetry::init::TelemetryError;
+pub use greentic_telemetry::init::{
+    TelemetryConfig, init_telemetry, init_telemetry_auto, init_telemetry_from_config, shutdown,
+};
 #[cfg(feature = "telemetry-autoinit")]
-pub use greentic_telemetry::{OtlpConfig, TelemetryCtx, init_otlp, layer_from_task_local};
+pub use greentic_telemetry::{TelemetryCtx, layer_from_task_local};
+#[cfg(feature = "telemetry-autoinit")]
+/// Error type propagated from telemetry initialisation routines.
+pub type TelemetryError = anyhow::Error;
 #[cfg(feature = "telemetry-autoinit")]
 pub use greentic_types_macros::main;
 #[cfg(feature = "telemetry-autoinit")]
@@ -28,20 +31,19 @@ pub use tokio::main as __tokio_main;
 #[cfg(feature = "telemetry-autoinit")]
 /// Installs the default Greentic telemetry stack using OTLP + task-local context injection.
 pub fn install_telemetry(service_name: &str) -> Result<(), TelemetryError> {
-    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .unwrap_or_else(|_| "http://localhost:4317".into());
+    let cfg = TelemetryConfig {
+        service_name: service_name.to_string(),
+    };
 
-    let layers: Vec<Box<dyn Layer<Registry> + Send + Sync + 'static>> =
-        vec![Box::new(layer_from_task_local())];
+    // Initialize telemetry/export pipeline (OTLP or JSON) via greentic-telemetry.
+    init_telemetry_auto(cfg)?;
 
-    init_otlp(
-        OtlpConfig {
-            service_name: service_name.to_string(),
-            endpoint: Some(endpoint),
-            sampling_rate: None,
-        },
-        layers,
-    )
+    // Best-effort add task-local context propagation to the subscriber; ignore if already set.
+    let _ = tracing_subscriber::registry()
+        .with(layer_from_task_local())
+        .try_init();
+
+    Ok(())
 }
 
 #[cfg(feature = "telemetry-autoinit")]

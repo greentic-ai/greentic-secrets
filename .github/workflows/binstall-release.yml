@@ -1,0 +1,122 @@
+name: Binstall Release
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+      tag: ${{ steps.extract.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: extract
+        name: Read workspace version
+        run: |
+          set -euo pipefail
+          version=$(python3 - <<'PY'
+import re
+from pathlib import Path
+text = Path("Cargo.toml").read_text()
+match = re.search(r'\[workspace\.package\].*?^version\s*=\s*"([^"]+)"', text, re.M | re.S)
+if not match:
+    raise SystemExit("workspace.package.version not found")
+print(match.group(1))
+PY
+          )
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build greentic-secrets-cli
+        run: cargo build --release -p greentic-secrets-cli
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.version.outputs.version }}'
+          target='${{ matrix.target }}'
+          package="greentic-secrets-cli-v${version}-${target}"
+          staging="$(mktemp -d)"
+          cp "target/release/greentic-secrets-cli" "$staging/"
+          cp LICENSE README.md "$staging/"
+          tar -C "$staging" -czf "${package}.tar.gz" .
+          shasum -a 256 "${package}.tar.gz" > "${package}.sha256"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = '${{ needs.version.outputs.version }}'
+          $target = '${{ matrix.target }}'
+          $package = "greentic-secrets-cli-v$version-$target"
+          $staging = Join-Path $env:RUNNER_TEMP "package"
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item "target\\release\\greentic-secrets-cli.exe" $staging
+          Copy-Item "LICENSE" $staging
+          Copy-Item "README.md" $staging
+          $zipPath = "$package.zip"
+          Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath
+          Get-FileHash $zipPath -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $zipPath" } | Set-Content "$package.sha256"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            *.tar.gz
+            *.zip
+            *.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: "greentic-secrets ${{ needs.version.outputs.version }}"
+          files: |
+            dist/**/*.tar.gz
+            dist/**/*.zip
+            dist/**/*.sha256
+          make_latest: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false
+          overwrite: true

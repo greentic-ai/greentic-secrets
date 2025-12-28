@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use reqwest::{
     Client, Method, Response,
     header::{HeaderMap, HeaderName, HeaderValue},
@@ -63,9 +63,9 @@ impl HttpBuilder {
         if let Some(timeout) = self.timeout {
             builder = builder.timeout(timeout);
         }
-        builder = builder
-            .danger_accept_invalid_certs(self.danger_accept_invalid_certs)
-            .danger_accept_invalid_hostnames(self.danger_accept_invalid_hostnames);
+        if self.danger_accept_invalid_certs || self.danger_accept_invalid_hostnames {
+            bail!("insecure TLS is not permitted");
+        }
         if let Some(proxy_url) = self.proxy {
             let proxy = reqwest::Proxy::all(proxy_url.as_str())
                 .with_context(|| format!("invalid proxy url: {proxy_url}"))?;

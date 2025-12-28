@@ -6,7 +6,7 @@
 //! execute via the standard Kubernetes HTTPS endpoints using a bearer token
 //! provided through environment variables.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use greentic_secrets_core::http::{Http, HttpResponse};
 use greentic_secrets_spec::{
@@ -481,7 +481,7 @@ impl K8sProviderConfig {
             builder = builder.add_root_certificate(cert);
         }
         if self.insecure_skip_tls {
-            builder = builder.danger_accept_invalid_certs(true);
+            bail!("K8S_INSECURE_SKIP_TLS is not permitted");
         }
         Http::from_builder(builder).context("failed to build kubernetes HTTP client")
     }
@@ -843,7 +843,6 @@ mod tests {
         set_env("K8S_BEARER_TOKEN", "test-token");
         set_env("K8S_NAMESPACE_PREFIX", "unit");
         set_env("K8S_KEK_ALIAS", "default");
-        set_env("K8S_INSECURE_SKIP_TLS", "1");
         set_env("K8S_HTTP_TIMEOUT_SECS", "1");
         clear_env("K8S_BEARER_TOKEN_FILE");
         clear_env("K8S_CA_BUNDLE");

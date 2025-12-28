@@ -22,7 +22,8 @@ async fn run_example() -> anyhow::Result<()> {
         .get_text("secrets://dev/example-tenant/_/configs/db_password")
         .await
     {
-        println!("db_password: {password}");
+        // Avoid logging the secret value; report success with metadata only.
+        println!("db_password retrieved (len={} chars)", password.len());
     } else {
         println!("db_password secret not found");
     }
