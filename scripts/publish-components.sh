@@ -32,6 +32,7 @@ jq -c '.[]' "${DIGESTS}" | while read -r entry; do
     exit 1
   fi
   oras push "${ref}" \
+    --disable-path-validation \
     "${wasm_path}:application/vnd.greentic.wasm.component" \
     --annotation "org.opencontainers.image.revision=${GIT_SHA}" \
     --annotation "greentic.component.id=${id}" \

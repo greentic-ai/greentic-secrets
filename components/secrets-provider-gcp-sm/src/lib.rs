@@ -1,12 +1,8 @@
 use base64::{engine::general_purpose, Engine};
-#[cfg(not(target_arch = "wasm32"))]
-use greentic_interfaces::bindings::generated::greentic_provider_schema_core_1_0_0_schema_core::exports::greentic::provider_schema_core::schema_core_api;
 #[cfg(target_arch = "wasm32")]
 mod bindings {
     include!("../../common/schema_core_api.rs");
 }
-#[cfg(target_arch = "wasm32")]
-use bindings::exports::greentic::provider_schema_core::schema_core_api;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
