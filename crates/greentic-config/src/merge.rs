@@ -227,3 +227,162 @@ fn apply_dev(
     *target = Some(dev_cfg);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provenance() -> ProvenanceMap {
+        ProvenanceMap::new()
+    }
+
+    #[test]
+    fn apply_layer_sets_values_and_provenance() {
+        let mut cfg = GreenticConfig::default();
+        let mut prov = provenance();
+        let layer = GreenticConfigLayer {
+            schema_version: Some(greentic_config_types::ConfigVersion("2".into())),
+            environment: Some(EnvironmentLayer {
+                env_id: Some(EnvId::try_from("prod").unwrap()),
+                deployment: Some(greentic_types::DeploymentCtx {
+                    cloud: greentic_types::Cloud::Aws,
+                    region: Some("us-west-2".into()),
+                    platform: greentic_types::Platform::K8s,
+                    runtime: None,
+                }),
+                connection: Some(greentic_types::ConnectionKind::Online),
+                region: Some("us-west-2".into()),
+            }),
+            paths: Some(PathsLayer {
+                greentic_root: Some("/tmp/gt".into()),
+                state_dir: Some("/tmp/gt/state".into()),
+                cache_dir: Some("/tmp/gt/cache".into()),
+                logs_dir: Some("/tmp/gt/logs".into()),
+            }),
+            runtime: Some(RuntimeLayer {
+                max_concurrency: Some(8),
+                request_timeout_ms: Some(1000),
+                idle_timeout_ms: Some(2000),
+            }),
+            telemetry: Some(TelemetryLayer {
+                enabled: Some(false),
+                exporter: Some("stdout".into()),
+                endpoint: Some("http://otel".into()),
+                sampling: Some(0.5),
+            }),
+            network: Some(NetworkLayer {
+                proxy: Some("http://proxy".into()),
+                no_proxy: Some("localhost".into()),
+                tls_mode: Some("rustls".into()),
+                connect_timeout_ms: Some(30),
+                request_timeout_ms: Some(40),
+                offline: Some(true),
+            }),
+            secrets: Some(SecretsLayer {
+                kind: Some("aws".into()),
+                profile: Some("p1".into()),
+                endpoint: Some("http://endpoint".into()),
+            }),
+            dev: Some(DevLayer {
+                default_env: Some("staging".into()),
+                default_tenant: Some("tenant1".into()),
+                default_team: Some("team-a".into()),
+            }),
+        };
+
+        apply_layer(&mut cfg, layer, ConfigSource::Cli, &mut prov).expect("apply");
+
+        assert_eq!(cfg.schema_version.0, "2");
+        assert_eq!(cfg.environment.env_id, EnvId::try_from("prod").unwrap());
+        assert_eq!(cfg.environment.region.as_deref(), Some("us-west-2"));
+        assert_eq!(cfg.paths.greentic_root, std::path::PathBuf::from("/tmp/gt"));
+        assert_eq!(cfg.runtime.max_concurrency, Some(8));
+        assert_eq!(cfg.telemetry.enabled, false);
+        assert_eq!(cfg.telemetry.exporter, Some(TelemetryExporter::Stdout));
+        assert_eq!(cfg.network.tls.mode, TlsMode::Rustls);
+        assert_eq!(cfg.secrets.kind, "aws");
+        assert_eq!(
+            cfg.dev.as_ref().unwrap().default_env,
+            EnvId::try_from("staging").unwrap()
+        );
+        assert_eq!(
+            cfg.dev.as_ref().unwrap().default_team.as_deref(),
+            Some("team-a")
+        );
+
+        for path in [
+            "schema_version",
+            "environment.env_id",
+            "paths.greentic_root",
+            "runtime.max_concurrency",
+            "telemetry.exporter",
+            "network.tls.mode",
+            "secrets.kind",
+            "dev.default_env",
+        ] {
+            assert_eq!(
+                prov.get(path),
+                Some(&ConfigSource::Cli),
+                "missing provenance for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_rejects_unknown_exporter() {
+        let mut cfg = GreenticConfig::default();
+        let mut prov = provenance();
+        let layer = GreenticConfigLayer {
+            telemetry: Some(TelemetryLayer {
+                exporter: Some("bogus".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = apply_layer(&mut cfg, layer, ConfigSource::Env, &mut prov).unwrap_err();
+        assert!(err.to_string().contains("unknown telemetry exporter"));
+        assert!(cfg.telemetry.exporter.is_none());
+        assert!(prov.is_empty());
+    }
+
+    #[test]
+    fn network_rejects_unknown_tls_mode() {
+        let mut cfg = GreenticConfig::default();
+        let mut prov = provenance();
+        let layer = GreenticConfigLayer {
+            network: Some(NetworkLayer {
+                tls_mode: Some("invalid".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = apply_layer(&mut cfg, layer, ConfigSource::Env, &mut prov).unwrap_err();
+        assert!(err.to_string().contains("unknown tls mode"));
+        assert_eq!(cfg.network.tls.mode, TlsMode::System);
+        assert!(prov.is_empty());
+    }
+
+    #[test]
+    fn dev_layer_rejects_invalid_env() {
+        let mut cfg = GreenticConfig::default();
+        let mut prov = provenance();
+        let layer = GreenticConfigLayer {
+            dev: Some(DevLayer {
+                default_env: Some("not valid".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let err = apply_layer(&mut cfg, layer, ConfigSource::Env, &mut prov).unwrap_err();
+        assert!(err.to_string().contains("invalid dev.default_env"));
+        // ensure existing config untouched
+        assert_eq!(
+            cfg.dev.as_ref().unwrap().default_env,
+            EnvId::try_from("dev").unwrap()
+        );
+        assert!(prov.is_empty());
+    }
+}

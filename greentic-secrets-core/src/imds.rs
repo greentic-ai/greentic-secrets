@@ -25,7 +25,8 @@ pub async fn head(url: &str, headers: &[(&str, &str)], timeout: Duration) -> boo
         Err(_) => return false,
     };
 
-    let mut request = client.head(parsed); // codeql[non-https-url]: IMDS only supports HTTP on link-local 169.254.169.254 and is validated above.
+    // codeql[non-https-url]: IMDS only supports HTTP on link-local 169.254.169.254 and is validated above.
+    let mut request = client.head(parsed);
     for (key, value) in headers {
         request = request.header(*key, *value);
     }
