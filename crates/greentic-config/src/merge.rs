@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(cfg.environment.region.as_deref(), Some("us-west-2"));
         assert_eq!(cfg.paths.greentic_root, std::path::PathBuf::from("/tmp/gt"));
         assert_eq!(cfg.runtime.max_concurrency, Some(8));
-        assert_eq!(cfg.telemetry.enabled, false);
+        assert!(!cfg.telemetry.enabled);
         assert_eq!(cfg.telemetry.exporter, Some(TelemetryExporter::Stdout));
         assert_eq!(cfg.network.tls.mode, TlsMode::Rustls);
         assert_eq!(cfg.secrets.kind, "aws");

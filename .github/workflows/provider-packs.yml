@@ -57,15 +57,16 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(cat target/provider-packs/VERSION)
+          REGISTRY_OWNER=${{ github.repository_owner }}
           for pack in target/provider-packs/secrets-*.gtpack; do
             name=$(basename "${pack}" .gtpack)
-            ref="ghcr.io/greentic-ai/greentic-packs/${name}:${VERSION}"
+            ref="ghcr.io/${REGISTRY_OWNER}/greentic-packs/${name}:${VERSION}"
             oras push "${ref}" \
               "${pack}:application/vnd.greentic.pack+zip"
             echo "::notice::Pushed ${ref}"
           done
           # Push bundle
-          bundle_ref="ghcr.io/greentic-ai/greentic-packs/secrets-providers:${VERSION}"
+          bundle_ref="ghcr.io/${REGISTRY_OWNER}/greentic-packs/secrets-providers:${VERSION}"
           oras push "${bundle_ref}" \
             "target/provider-packs/secrets-providers.gtpack:application/vnd.greentic.pack+zip"
           echo "::notice::Pushed ${bundle_ref}"

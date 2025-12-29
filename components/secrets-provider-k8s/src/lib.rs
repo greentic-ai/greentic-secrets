@@ -47,6 +47,7 @@ pub struct Provider;
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
     use super::*;
+    use greentic_interfaces::bindings::generated::greentic_provider_schema_core_1_0_0_schema_core::exports::greentic::provider_schema_core::schema_core_api;
     use kube::{api::Api, Client, Config as KubeConfig};
     use once_cell::sync::{Lazy, OnceCell};
     use serde::Deserialize;
@@ -402,6 +403,7 @@ mod wasm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use greentic_interfaces::bindings::generated::greentic_provider_schema_core_1_0_0_schema_core::exports::greentic::provider_schema_core::schema_core_api;
     use schema_core_api::Guest;
 
     fn json_bytes(val: serde_json::Value) -> Vec<u8> {

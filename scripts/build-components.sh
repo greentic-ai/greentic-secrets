@@ -33,6 +33,9 @@ echo "Building wasm components for version ${VERSION}"
 
 rustup target add wasm32-wasip2 >/dev/null
 
+REGISTRY_NAMESPACE="${COMPONENTS_REGISTRY:-ghcr.io/greentic-ai/components}"
+echo "Publishing namespace: ${REGISTRY_NAMESPACE}"
+
 digests_json="${OUT_DIR}/digests.json"
 echo "[]" > "${digests_json}"
 
@@ -52,7 +55,7 @@ for comp in "${components[@]}"; do
   fi
   cp "${wasm_path}" "${OUT_DIR}/${comp}.wasm"
   digest="$(sha256sum "${wasm_path}" | awk '{print $1}')"
-  ref="ghcr.io/greentic-ai/components/${comp}:${VERSION}"
+  ref="${REGISTRY_NAMESPACE}/${comp}:${VERSION}"
   tmp="$(mktemp)"
   jq --arg id "${comp}" --arg version "${VERSION}" --arg ref "${ref}" --arg digest "${digest}" --arg path "${comp}.wasm" \
     '. += [{"id":$id,"version":$version,"ref":$ref,"digest":$digest,"path":$path}]' \
