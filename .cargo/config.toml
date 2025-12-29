@@ -1,2 +1,2 @@
-[alias]
-tests = ["test", "--workspace", "--all-features"]
+[env]
+K8S_OPENAPI_ENABLED_VERSION = "1.30"

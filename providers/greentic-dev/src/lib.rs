@@ -132,15 +132,15 @@ impl Persistence {
                     continue;
                 }
 
-                if let Some((key, value)) = line.split_once('=') {
-                    if key.trim() == ENV_KEY {
-                        let decoded = STANDARD_NO_PAD
-                            .decode(value.trim())
-                            .map_err(|err| Error::Storage(err.to_string()))?;
-                        let persisted: PersistedState = serde_json::from_slice(&decoded)
-                            .map_err(|err| Error::Storage(err.to_string()))?;
-                        return Ok(persisted.into_state());
-                    }
+                if let Some((key, value)) = line.split_once('=')
+                    && key.trim() == ENV_KEY
+                {
+                    let decoded = STANDARD_NO_PAD
+                        .decode(value.trim())
+                        .map_err(|err| Error::Storage(err.to_string()))?;
+                    let persisted: PersistedState = serde_json::from_slice(&decoded)
+                        .map_err(|err| Error::Storage(err.to_string()))?;
+                    return Ok(persisted.into_state());
                 }
             }
             Ok(State::default())
@@ -345,16 +345,16 @@ impl SecretsBackend for DevBackend {
                 continue;
             }
 
-            if let Some(prefix) = category_prefix {
-                if !record.meta.uri.category().starts_with(prefix) {
-                    continue;
-                }
+            if let Some(prefix) = category_prefix
+                && !record.meta.uri.category().starts_with(prefix)
+            {
+                continue;
             }
 
-            if let Some(prefix) = name_prefix {
-                if !record.meta.uri.name().starts_with(prefix) {
-                    continue;
-                }
+            if let Some(prefix) = name_prefix
+                && !record.meta.uri.name().starts_with(prefix)
+            {
+                continue;
             }
 
             items.push(SecretListItem::from_meta(

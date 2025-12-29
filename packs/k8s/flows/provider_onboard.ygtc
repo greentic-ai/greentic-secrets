@@ -1,0 +1,98 @@
+schema_version: flow-v1
+id: provider_onboard
+kind: event
+entrypoints:
+  default: {}
+nodes:
+  validate_config:
+    component:
+      id: greentic.secrets.policy_validator
+      operation: validate_config
+    input:
+      config: ${inputs.config}
+      schema_ref: schema/config.schema.json
+    telemetry: { span: provider.onboard.validate_config }
+
+  auth:
+    after: validate_config
+    component:
+      id: greentic.secrets.provider.k8s
+      operation: acquire_identity
+    input:
+      config: ${inputs.config}
+      secrets: ${inputs.secrets}
+    telemetry: { span: provider.onboard.auth }
+
+  connectivity:
+    after: auth
+    component:
+      id: greentic.secrets.provider.k8s
+      operation: connectivity_test
+    input:
+      config: ${inputs.config}
+    telemetry: { span: provider.onboard.connectivity }
+
+  permissions:
+    after: connectivity
+    component:
+      id: greentic.secrets.provider.k8s
+      operation: permissions_test
+    input:
+      config: ${inputs.config}
+    telemetry: { span: provider.onboard.permissions }
+
+  ensure_namespace:
+    after: permissions
+    component:
+      id: greentic.secrets.provider.k8s
+      operation: ensure_namespace
+    input:
+      config: ${inputs.config}
+    telemetry: { span: provider.onboard.ensure_namespace }
+
+  registration:
+    after: ensure_namespace
+    component:
+      id: greentic.secrets.provider.k8s
+      operation: record_registration
+    input:
+      config: ${inputs.config}
+      capabilities:
+        rotate: true
+        versioning: true
+        tags: true
+    telemetry: { span: provider.onboard.registration }
+    output:
+      registration_id: ${data.registration_id}
+
+  audit:
+    after: registration
+    component:
+      id: greentic.secrets.audit_exporter
+      operation: emit_event
+    input:
+      sink: ${inputs.config.audit}
+      event:
+        kind: PROVIDER_ONBOARDED
+        provider: greentic.secrets.k8s
+        status: READY
+        registration_id: ${registration.output.registration_id}
+        correlation_id: ${inputs.correlation_id}
+    telemetry: { span: provider.onboard.audit }
+
+outputs:
+  status: OK
+  provider:
+    id: greentic.secrets.k8s
+    version: ${context.pack_version}
+    tenant: ${inputs.config.tenant_id}
+    environment: ${inputs.config.environment}
+  correlation_id: ${inputs.correlation_id}
+  registration_id: ${registration.output.registration_id}
+  capabilities:
+    rotate: true
+    versioning: true
+    tags: true
+  audit_events:
+    - ${audit.input.event}
+  artifacts: []

@@ -497,15 +497,15 @@ impl SecretsBackend for AzureSecretsBackend {
                             {
                                 continue;
                             }
-                            if let Some(prefix) = category_prefix {
-                                if !record.meta.uri.category().starts_with(prefix) {
-                                    continue;
-                                }
+                            if let Some(prefix) = category_prefix
+                                && !record.meta.uri.category().starts_with(prefix)
+                            {
+                                continue;
                             }
-                            if let Some(prefix) = name_prefix {
-                                if !record.meta.uri.name().starts_with(prefix) {
-                                    continue;
-                                }
+                            if let Some(prefix) = name_prefix
+                                && !record.meta.uri.name().starts_with(prefix)
+                            {
+                                continue;
                             }
                             items.push(SecretListItem::from_meta(
                                 &record.meta,
@@ -625,10 +625,10 @@ impl AzureAuth {
     async fn fetch_or_refresh(&self, config: &KvAuthConfig) -> SecretsResult<String> {
         {
             let guard = self.cache.read().await;
-            if let Some(cache) = guard.as_ref() {
-                if Instant::now() < cache.expires_at {
-                    return Ok(cache.header.clone());
-                }
+            if let Some(cache) = guard.as_ref()
+                && Instant::now() < cache.expires_at
+            {
+                return Ok(cache.header.clone());
             }
         }
 

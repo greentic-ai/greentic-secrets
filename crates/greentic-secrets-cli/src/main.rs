@@ -317,11 +317,11 @@ fn handle_wizard(cmd: WizardCmd, _resolved: &ResolvedConfig) -> Result<()> {
 
     for entry in &mut doc.entries {
         let key = env_key_for_entry(entry);
-        if let Some(map) = &dotenv {
-            if let Some(value) = map.get(&key) {
-                fill_entry_from_str(entry, value)?;
-                continue;
-            }
+        if let Some(map) = &dotenv
+            && let Some(value) = map.get(&key)
+        {
+            fill_entry_from_str(entry, value)?;
+            continue;
         }
 
         if cmd.non_interactive {
@@ -477,20 +477,20 @@ fn scaffold_entry(ctx: &CtxFile, req: &SecretRequirement) -> SeedEntry {
 }
 
 fn placeholder_value(req: &SecretRequirement) -> SeedValue {
-    if let Some(examples) = &req.examples {
-        if let Some(first) = examples.first() {
-            return match req.format {
-                SecretFormat::Text => SeedValue::Text {
-                    text: first.as_str().unwrap_or_default().to_string(),
-                },
-                SecretFormat::Json => SeedValue::Json {
-                    json: first.clone(),
-                },
-                SecretFormat::Bytes => SeedValue::BytesB64 {
-                    bytes_b64: STANDARD.encode(first.to_string()),
-                },
-            };
-        }
+    if let Some(examples) = &req.examples
+        && let Some(first) = examples.first()
+    {
+        return match req.format {
+            SecretFormat::Text => SeedValue::Text {
+                text: first.as_str().unwrap_or_default().to_string(),
+            },
+            SecretFormat::Json => SeedValue::Json {
+                json: first.clone(),
+            },
+            SecretFormat::Bytes => SeedValue::BytesB64 {
+                bytes_b64: STANDARD.encode(first.to_string()),
+            },
+        };
     }
 
     match req.format {
@@ -508,10 +508,10 @@ fn read_pack_requirements(path: &Path) -> Result<Vec<SecretRequirement>> {
     let bytes =
         fs::read(path).with_context(|| format!("failed to read pack {}", path.display()))?;
 
-    if looks_like_zip(&bytes) {
-        if let Ok(reqs) = read_gtpack_zip(&bytes) {
-            return Ok(reqs);
-        }
+    if looks_like_zip(&bytes)
+        && let Ok(reqs) = read_gtpack_zip(&bytes)
+    {
+        return Ok(reqs);
     }
 
     if let Ok(meta) = serde_json::from_slice::<PackMetadata>(&bytes) {

@@ -194,16 +194,15 @@ impl AwsSecretsBackend {
                 };
 
                 for entry in response.versions() {
-                    if let Some(version_id) = entry.version_id() {
-                        if let Some(stored) = fetch_secret_version_inner(
+                    if let Some(version_id) = entry.version_id()
+                        && let Some(stored) = fetch_secret_version_inner(
                             client.clone(),
                             secret_id.clone(),
                             Some(version_id.to_string()),
                         )
                         .await?
-                        {
-                            collected.push(stored);
-                        }
+                    {
+                        collected.push(stored);
                     }
                 }
 
@@ -234,19 +233,19 @@ impl AwsSecretsBackend {
                 .create_secret()
                 .name(secret_id.clone())
                 .secret_string(payload.clone());
-            if let Some(desc) = description.as_ref() {
-                if !desc.is_empty() {
-                    request = request.description(desc.clone());
-                }
+            if let Some(desc) = description.as_ref()
+                && !desc.is_empty()
+            {
+                request = request.description(desc.clone());
             }
 
             match request.send().await {
                 Ok(_) => Ok(true),
                 Err(err) => {
-                    if let SdkError::ServiceError(context) = &err {
-                        if context.err().is_resource_exists_exception() {
-                            return Ok(false);
-                        }
+                    if let SdkError::ServiceError(context) = &err
+                        && context.err().is_resource_exists_exception()
+                    {
+                        return Ok(false);
                     }
                     Err(storage_error("create_secret", err))
                 }
@@ -326,20 +325,20 @@ impl AwsSecretsBackend {
                     if uri.scope().tenant() != scope_tenant {
                         continue;
                     }
-                    if let Some(ref team) = scope_team {
-                        if uri.scope().team() != Some(team.as_str()) {
-                            continue;
-                        }
+                    if let Some(ref team) = scope_team
+                        && uri.scope().team() != Some(team.as_str())
+                    {
+                        continue;
                     }
-                    if let Some(ref cat_prefix) = category_prefix {
-                        if !uri.category().starts_with(cat_prefix) {
-                            continue;
-                        }
+                    if let Some(ref cat_prefix) = category_prefix
+                        && !uri.category().starts_with(cat_prefix)
+                    {
+                        continue;
                     }
-                    if let Some(ref name_prefix) = name_prefix {
-                        if !uri.name().starts_with(name_prefix) {
-                            continue;
-                        }
+                    if let Some(ref name_prefix) = name_prefix
+                        && !uri.name().starts_with(name_prefix)
+                    {
+                        continue;
                     }
 
                     if let Some(stored) =

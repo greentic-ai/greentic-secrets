@@ -261,10 +261,10 @@ fn handle_rotate(
 }
 
 fn extract_correlation(message: &Message) -> CorrelationId {
-    if let Some(headers) = &message.headers {
-        if let Some(value) = headers.get(CORRELATION_ID_HEADER) {
-            return CorrelationId(value.as_str().to_string());
-        }
+    if let Some(headers) = &message.headers
+        && let Some(value) = headers.get(CORRELATION_ID_HEADER)
+    {
+        return CorrelationId(value.as_str().to_string());
     }
     CorrelationId(Uuid::new_v4().to_string())
 }

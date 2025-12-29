@@ -316,23 +316,23 @@ impl SecretsBackend for VaultSecretsBackend {
     ) -> SecretsResult<Vec<SecretListItem>> {
         let mut items = Vec::new();
         for uri in self.list_secrets_for_scope(scope)? {
-            if let Some(prefix) = category_prefix {
-                if !uri.category().starts_with(prefix) {
-                    continue;
-                }
+            if let Some(prefix) = category_prefix
+                && !uri.category().starts_with(prefix)
+            {
+                continue;
             }
-            if let Some(prefix) = name_prefix {
-                if !uri.name().starts_with(prefix) {
-                    continue;
-                }
+            if let Some(prefix) = name_prefix
+                && !uri.name().starts_with(prefix)
+            {
+                continue;
             }
-            if let Some(versioned) = self.get(&uri, None)? {
-                if let Some(record) = versioned.record() {
-                    items.push(SecretListItem::from_meta(
-                        &record.meta,
-                        Some(versioned.version.to_string()),
-                    ));
-                }
+            if let Some(versioned) = self.get(&uri, None)?
+                && let Some(record) = versioned.record()
+            {
+                items.push(SecretListItem::from_meta(
+                    &record.meta,
+                    Some(versioned.version.to_string()),
+                ));
             }
         }
         Ok(items)

@@ -1,0 +1,44 @@
+name: Publish Components
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust target
+        run: rustup target add wasm32-wasip2
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Build components (wasm)
+        run: ./scripts/build-components.sh
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Login to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${GHCR_TOKEN}" | oras login ghcr.io -u "${GHCR_USER}" --password-stdin
+
+      - name: Publish components to GHCR
+        run: ./scripts/publish-components.sh
+
+      - name: Upload component digests
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-digests
+          path: target/components/digests.json

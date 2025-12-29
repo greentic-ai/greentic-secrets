@@ -288,30 +288,30 @@ impl SecretsBackend for K8sSecretsBackend {
                 if record_scope.env() != scope.env() || record_scope.tenant() != scope.tenant() {
                     continue;
                 }
-                if let Some(team) = scope.team() {
-                    if record_scope.team() != Some(team) {
-                        continue;
-                    }
+                if let Some(team) = scope.team()
+                    && record_scope.team() != Some(team)
+                {
+                    continue;
                 }
-                if let Some(prefix) = category_prefix {
-                    if !record.meta.uri.category().starts_with(prefix) {
-                        continue;
-                    }
+                if let Some(prefix) = category_prefix
+                    && !record.meta.uri.category().starts_with(prefix)
+                {
+                    continue;
                 }
-                if let Some(prefix) = name_prefix {
-                    if !record.meta.uri.name().starts_with(prefix) {
-                        continue;
-                    }
+                if let Some(prefix) = name_prefix
+                    && !record.meta.uri.name().starts_with(prefix)
+                {
+                    continue;
                 }
 
                 let versioned = snapshot.into_versioned()?;
-                if let Some(versioned) = versioned {
-                    if let Some(record) = versioned.record() {
-                        items.push(SecretListItem::from_meta(
-                            &record.meta,
-                            Some(versioned.version.to_string()),
-                        ));
-                    }
+                if let Some(versioned) = versioned
+                    && let Some(record) = versioned.record()
+                {
+                    items.push(SecretListItem::from_meta(
+                        &record.meta,
+                        Some(versioned.version.to_string()),
+                    ));
                 }
             }
         }

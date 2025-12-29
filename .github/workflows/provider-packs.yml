@@ -1,0 +1,68 @@
+name: Provider Packs
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y zip yq
+
+      - name: Pack unit validation (provider-core extension + schemas + pack.lock)
+        run: cargo test -p greentic-secrets-runner pack_validation
+
+      - name: Validate packs
+        run: ./scripts/validate-packs.sh
+
+      - name: Build provider packs
+        run: ./scripts/build-provider-packs.sh
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Login to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${GHCR_TOKEN}" | oras login ghcr.io -u "${GHCR_USER}" --password-stdin
+
+      - name: Write bundle descriptor for store compatibility
+        run: |
+          VERSION=$(cat target/provider-packs/VERSION)
+          cat > target/provider-packs/README.txt <<EOF
+          Provider packs for greentic-secrets (version ${VERSION}):
+          - secrets-aws-sm.gtpack
+          - secrets-azure-kv.gtpack
+          - secrets-gcp-sm.gtpack
+          - secrets-k8s.gtpack
+          - secrets-vault-kv.gtpack
+          - bundle: secrets-providers.gtpack
+          EOF
+
+      - name: Push packs to GHCR
+        run: |
+          set -euo pipefail
+          VERSION=$(cat target/provider-packs/VERSION)
+          for pack in target/provider-packs/secrets-*.gtpack; do
+            name=$(basename "${pack}" .gtpack)
+            ref="ghcr.io/greentic-ai/greentic-packs/${name}:${VERSION}"
+            oras push "${ref}" \
+              "${pack}:application/vnd.greentic.pack+zip"
+            echo "::notice::Pushed ${ref}"
+          done
+          # Push bundle
+          bundle_ref="ghcr.io/greentic-ai/greentic-packs/secrets-providers:${VERSION}"
+          oras push "${bundle_ref}" \
+            "target/provider-packs/secrets-providers.gtpack:application/vnd.greentic.pack+zip"
+          echo "::notice::Pushed ${bundle_ref}"

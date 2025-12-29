@@ -21,13 +21,13 @@ jobs:
         run: |
           set -euo pipefail
           version=$(python3 - <<'PY'
-import re
-from pathlib import Path
-text = Path("Cargo.toml").read_text()
-match = re.search(r'\[workspace\.package\].*?^version\s*=\s*"([^"]+)"', text, re.M | re.S)
-if not match:
-    raise SystemExit("workspace.package.version not found")
-print(match.group(1))
+            import re
+            from pathlib import Path
+            text = Path("Cargo.toml").read_text()
+            match = re.search(r'\[workspace\.package\].*?^version\s*=\s*"([^"]+)"', text, re.M | re.S)
+            if not match:
+                raise SystemExit("workspace.package.version not found")
+            print(match.group(1))
 PY
           )
           echo "version=${version}" >> "$GITHUB_OUTPUT"

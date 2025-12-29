@@ -43,10 +43,10 @@ impl ResolverConfig {
     pub fn from_env() -> Self {
         let mut config = ResolverConfig::new();
 
-        if let Ok(provider) = std::env::var("GREENTIC_SECRETS_PROVIDER") {
-            if let Some(parsed) = Provider::from_env_value(&provider) {
-                config.provider = parsed;
-            }
+        if let Ok(provider) = std::env::var("GREENTIC_SECRETS_PROVIDER")
+            && let Some(parsed) = Provider::from_env_value(&provider)
+        {
+            config.provider = parsed;
         }
 
         let dev_fallback = std::env::var("GREENTIC_SECRETS_DEV")
@@ -54,10 +54,10 @@ impl ResolverConfig {
             .unwrap_or(true);
         config.dev_fallback = dev_fallback;
 
-        if let Ok(root) = std::env::var("GREENTIC_SECRETS_FILE_ROOT") {
-            if !root.trim().is_empty() {
-                config.file_root = Some(PathBuf::from(root));
-            }
+        if let Ok(root) = std::env::var("GREENTIC_SECRETS_FILE_ROOT")
+            && !root.trim().is_empty()
+        {
+            config.file_root = Some(PathBuf::from(root));
         }
 
         config

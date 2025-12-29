@@ -128,28 +128,28 @@ impl CoreBuilder {
     pub fn from_env() -> Self {
         let mut builder = CoreBuilder::default();
 
-        if let Ok(tenant) = std::env::var("GREENTIC_SECRETS_TENANT") {
-            if !tenant.trim().is_empty() {
-                builder.tenant = Some(tenant);
-            }
+        if let Ok(tenant) = std::env::var("GREENTIC_SECRETS_TENANT")
+            && !tenant.trim().is_empty()
+        {
+            builder.tenant = Some(tenant);
         }
 
-        if let Ok(team) = std::env::var("GREENTIC_SECRETS_TEAM") {
-            if !team.trim().is_empty() {
-                builder.team = Some(team);
-            }
+        if let Ok(team) = std::env::var("GREENTIC_SECRETS_TEAM")
+            && !team.trim().is_empty()
+        {
+            builder.team = Some(team);
         }
 
-        if let Ok(ttl) = std::env::var("GREENTIC_SECRETS_CACHE_TTL_SECS") {
-            if let Ok(seconds) = ttl.parse::<u64>() {
-                builder.default_ttl = Some(Duration::from_secs(seconds.max(1)));
-            }
+        if let Ok(ttl) = std::env::var("GREENTIC_SECRETS_CACHE_TTL_SECS")
+            && let Ok(seconds) = ttl.parse::<u64>()
+        {
+            builder.default_ttl = Some(Duration::from_secs(seconds.max(1)));
         }
 
-        if let Ok(url) = std::env::var("GREENTIC_SECRETS_NATS_URL") {
-            if !url.trim().is_empty() {
-                builder.nats_url = Some(url);
-            }
+        if let Ok(url) = std::env::var("GREENTIC_SECRETS_NATS_URL")
+            && !url.trim().is_empty()
+        {
+            builder.nats_url = Some(url);
         }
 
         let dev_enabled = std::env::var("GREENTIC_SECRETS_DEV")
@@ -496,10 +496,10 @@ impl SecretsCore {
     fn cached_value(&self, uri: &SecretUri) -> Option<Vec<u8>> {
         let key = uri.to_string();
         let mut cache = self.cache.lock().unwrap();
-        if let Some(entry) = cache.get(&key) {
-            if entry.expires_at > Instant::now() {
-                return Some(entry.value.clone());
-            }
+        if let Some(entry) = cache.get(&key)
+            && entry.expires_at > Instant::now()
+        {
+            return Some(entry.value.clone());
         }
         cache.pop(&key);
         None
@@ -728,16 +728,16 @@ impl SecretsBackend for MemoryBackend {
                 continue;
             }
 
-            if let Some(prefix) = category_prefix {
-                if !record.meta.uri.category().starts_with(prefix) {
-                    continue;
-                }
+            if let Some(prefix) = category_prefix
+                && !record.meta.uri.category().starts_with(prefix)
+            {
+                continue;
             }
 
-            if let Some(prefix) = name_prefix {
-                if !record.meta.uri.name().starts_with(prefix) {
-                    continue;
-                }
+            if let Some(prefix) = name_prefix
+                && !record.meta.uri.name().starts_with(prefix)
+            {
+                continue;
             }
 
             items.push(SecretListItem::from_meta(

@@ -1,0 +1,57 @@
+schema_version: flow-v1
+id: provider_export_audit
+kind: event
+entrypoints:
+  default: {}
+nodes:
+  validate_config:
+    component:
+      id: greentic.secrets.policy_validator
+      operation: validate_config
+    input:
+      config: ${inputs.config}
+      schema_ref: schema/config.schema.json
+    telemetry: { span: provider.export.config }
+
+  export:
+    after: validate_config
+    component:
+      id: greentic.secrets.audit_exporter
+      operation: export_batch
+    input:
+      sink: ${inputs.config.audit}
+      cursor: ${inputs.cursor}
+      limit: ${inputs.limit}
+    telemetry: { span: provider.export.export }
+    output:
+      summary: ${data.summary}
+      cursor: ${data.cursor}
+
+  audit:
+    after: export
+    component:
+      id: greentic.secrets.audit_exporter
+      operation: emit_event
+    input:
+      sink: ${inputs.config.audit}
+      event:
+        kind: AUDIT_EXPORTED
+        provider: greentic.secrets.k8s
+        status: OK
+        correlation_id: ${inputs.correlation_id}
+        summary: ${export.output.summary}
+    telemetry: { span: provider.export.audit }
+
+outputs:
+  status: OK
+  provider:
+    id: greentic.secrets.k8s
+    version: ${context.pack_version}
+    tenant: ${inputs.config.tenant_id}
+    environment: ${inputs.config.environment}
+  correlation_id: ${inputs.correlation_id}
+  export_summary: ${export.output.summary}
+  export_cursor: ${export.output.cursor}
+  audit_events:
+    - ${audit.input.event}
+  artifacts: []

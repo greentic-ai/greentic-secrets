@@ -141,7 +141,7 @@ print_tool_versions() {
   show_tool_version jq "needed for cargo package dry-runs" jq --version
   show_tool_version docker "required for KinD/Vault/local provider checks" docker --version
   show_tool_version kind "required for provider-k8s" kind --version
-  show_tool_version kubectl "required for provider-k8s" kubectl version --client --short
+  show_tool_version kubectl "required for provider-k8s" kubectl version --client
   show_tool_version curl "required for Vault readiness + schema probes" curl --version
   show_tool_version cargo-tarpaulin "disable by uninstalling or set LOCAL_CHECK_STRICT=0" cargo tarpaulin --version
 }

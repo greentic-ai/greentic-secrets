@@ -1,0 +1,54 @@
+schema_version: flow-v1
+id: provider_validate
+kind: event
+entrypoints:
+  default: {}
+nodes:
+  validate_config:
+    component:
+      id: greentic.secrets.policy_validator
+      operation: validate_config
+    input:
+      config: ${inputs.config}
+      schema_ref: schema/config.schema.json
+    telemetry: { span: provider.validate.config }
+
+  health_check:
+    after: validate_config
+    component:
+      id: greentic.secrets.provider.k8s
+      operation: health_check
+    input:
+      config: ${inputs.config}
+    telemetry: { span: provider.validate.health }
+    output:
+      validation_report: ${data.report}
+
+  audit:
+    after: health_check
+    component:
+      id: greentic.secrets.audit_exporter
+      operation: emit_event
+    input:
+      sink: ${inputs.config.audit}
+      event:
+        kind: PROVIDER_VALIDATED
+        provider: greentic.secrets.k8s
+        status: ${health_check.output.validation_report.status}
+        correlation_id: ${inputs.correlation_id}
+        report_ref: validation_report.json
+    telemetry: { span: provider.validate.audit }
+
+outputs:
+  status: ${health_check.output.validation_report.status}
+  provider:
+    id: greentic.secrets.k8s
+    version: ${context.pack_version}
+    tenant: ${inputs.config.tenant_id}
+    environment: ${inputs.config.environment}
+  correlation_id: ${inputs.correlation_id}
+  audit_events:
+    - ${audit.input.event}
+  artifacts:
+    - path: validation_report.json
+      content: ${health_check.output.validation_report}

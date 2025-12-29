@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Kubernetes Secrets Provider Config",
+  "type": "object",
+  "properties": {
+    "tenant_id": { "type": "string" },
+    "environment": { "type": "string", "enum": ["dev", "stage", "prod"] },
+    "api_server": { "type": "string" },
+    "namespace": { "type": "string" },
+    "auth_mode": { "type": "string", "enum": ["in_cluster", "kubeconfig", "token"] },
+    "namespace_prefix": { "type": "string" },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "audit": {
+      "type": "object",
+      "properties": {
+        "sink_type": { "type": "string", "enum": ["splunk", "azure", "gcp", "http", "file"] },
+        "sink_config_ref": { "type": "string" }
+      },
+      "required": ["sink_type", "sink_config_ref"]
+    },
+    "timeouts": {
+      "type": "object",
+      "properties": {
+        "connect_ms": { "type": "integer", "minimum": 100 },
+        "op_ms": { "type": "integer", "minimum": 1000 }
+      },
+      "required": ["connect_ms", "op_ms"]
+    },
+    "retry_policy": {
+      "type": "object",
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "base_backoff_ms": { "type": "integer", "minimum": 10 },
+        "max_backoff_ms": { "type": "integer", "minimum": 10 },
+        "jitter": { "type": "boolean" }
+      },
+      "required": ["max_attempts", "base_backoff_ms", "max_backoff_ms", "jitter"]
+    },
+    "redaction_policy": {
+      "type": "object",
+      "properties": {
+        "redact_values": { "type": "boolean", "default": true },
+        "redact_headers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["Authorization", "X-Api-Key"]
+        },
+        "log_secret_refs_only": { "type": "boolean", "default": true }
+      },
+      "required": ["redact_values", "log_secret_refs_only"]
+    }
+  },
+  "required": [
+    "tenant_id",
+    "environment",
+    "namespace",
+    "auth_mode",
+    "namespace_prefix",
+    "audit",
+    "timeouts",
+    "retry_policy",
+    "redaction_policy"
+  ],
+  "additionalProperties": false
+}

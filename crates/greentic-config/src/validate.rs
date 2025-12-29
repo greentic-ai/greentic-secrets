@@ -24,17 +24,19 @@ pub fn validate(cfg: &GreenticConfig) -> Vec<String> {
             warnings.push("proxy configured while offline=true (proxy unused)".into());
         }
     }
-    if let Some(timeout) = cfg.runtime.request_timeout_ms {
-        if timeout > 0 && timeout < 100 {
-            warnings.push(format!("request_timeout_ms={timeout}ms is very low"));
-        }
+    if let Some(timeout) = cfg.runtime.request_timeout_ms
+        && timeout > 0
+        && timeout < 100
+    {
+        warnings.push(format!("request_timeout_ms={timeout}ms is very low"));
     }
-    if let Some(timeout) = cfg.network.request_timeout_ms {
-        if timeout > 0 && timeout < 100 {
-            warnings.push(format!(
-                "network.request_timeout_ms={timeout}ms is very low"
-            ));
-        }
+    if let Some(timeout) = cfg.network.request_timeout_ms
+        && timeout > 0
+        && timeout < 100
+    {
+        warnings.push(format!(
+            "network.request_timeout_ms={timeout}ms is very low"
+        ));
     }
 
     let temp_dir = env::temp_dir();

@@ -412,10 +412,10 @@ impl Authorizer {
                         None => continue,
                     };
 
-                    if let Some(raw) = jwk.x.as_ref() {
-                        if let Ok(raw_bytes) = decode_ed25519_key(raw) {
-                            cache_guard.insert(kid_val.clone(), Arc::new(raw_bytes));
-                        }
+                    if let Some(raw) = jwk.x.as_ref()
+                        && let Ok(raw_bytes) = decode_ed25519_key(raw)
+                    {
+                        cache_guard.insert(kid_val.clone(), Arc::new(raw_bytes));
                     }
                 }
 

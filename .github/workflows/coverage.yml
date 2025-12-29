@@ -9,6 +9,7 @@ on:
 
 jobs:
   coverage:
+    if: false  # temporarily disabled: tarpaulin consumes too much disk space on hosted runners
     runs-on: ubuntu-latest
     permissions:
       contents: read
