@@ -176,10 +176,7 @@ fn find_requirement<'a>(
         .find(|req| req.key.as_str() == key && scopes_match(uri.scope(), req.scope.as_ref()))
 }
 
-fn scopes_match(
-    uri_scope: &greentic_secrets_spec::Scope,
-    req_scope: Option<&SecretScope>,
-) -> bool {
+fn scopes_match(uri_scope: &greentic_secrets_spec::Scope, req_scope: Option<&SecretScope>) -> bool {
     let Some(req_scope) = req_scope else {
         return true;
     };
