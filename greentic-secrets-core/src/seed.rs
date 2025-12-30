@@ -461,19 +461,15 @@ mod tests {
     #[test]
     fn resolve_uri_formats_placeholder() {
         let ctx = DevContext::new("dev", "acme", None);
-        let req = SecretRequirement {
-            key: greentic_types::secrets::SecretKey::parse("configs/db").unwrap(),
-            required: true,
-            description: None,
-            scope: SecretScope {
-                env: "dev".into(),
-                tenant: "acme".into(),
-                team: None,
-            },
-            format: SecretFormat::Text,
-            schema: None,
-            examples: None,
-        };
+        let mut req = SecretRequirement::default();
+        req.key = greentic_types::secrets::SecretKey::parse("configs/db").unwrap();
+        req.required = true;
+        req.scope = Some(SecretScope {
+            env: "dev".into(),
+            tenant: "acme".into(),
+            team: None,
+        });
+        req.format = Some(SecretFormat::Text);
         let uri = resolve_uri(&ctx, &req);
         assert_eq!(uri, "secrets://dev/acme/_/configs/db");
     }

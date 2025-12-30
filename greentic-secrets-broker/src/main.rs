@@ -1,6 +1,7 @@
 use clap::Parser;
 use greentic_config::{CliOverrides as ConfigOverrides, ConfigResolver};
 use greentic_config_types::SecretsBackendRefConfig;
+use greentic_types::EnvId;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
@@ -34,12 +35,19 @@ async fn main() {
 
 async fn real_main() -> anyhow::Result<()> {
     let args = BrokerArgs::parse();
-    let overrides = ConfigOverrides {
-        config_path: args.config.clone(),
-        env: args.env.clone(),
-        ..Default::default()
-    };
-    let resolved = ConfigResolver::new().with_cli_overrides(overrides).load()?;
+    let mut overrides = ConfigOverrides::new();
+    if let Some(env) = args
+        .env
+        .as_deref()
+        .and_then(|value| EnvId::try_from(value).ok())
+    {
+        overrides = overrides.with_env_id(env);
+    }
+    let mut resolver = ConfigResolver::new();
+    if let Some(path) = args.config.clone() {
+        resolver = resolver.with_config_path(path);
+    }
+    let resolved = resolver.with_cli_overrides_typed(overrides).load()?;
     if args.verbose {
         println!(
             "config loaded (root={}, state_dir={}, sources={:?})",
@@ -73,8 +81,7 @@ fn broker_runtime_config(
         kind: std::env::var("SECRETS_BACKEND")
             .ok()
             .unwrap_or_else(|| resolved.config.secrets.kind.clone()),
-        profile: resolved.config.secrets.profile.clone(),
-        endpoint: resolved.config.secrets.endpoint.clone(),
+        reference: resolved.config.secrets.reference.clone(),
     };
     let http_addr = bind
         .parse()

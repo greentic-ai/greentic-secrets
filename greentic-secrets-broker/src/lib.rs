@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use auth::Authorizer;
 use greentic_config_types::{
-    NetworkConfig, PathsConfig, SecretsBackendRefConfig, TelemetryConfig, TelemetryExporter,
+    NetworkConfig, PathsConfig, SecretsBackendRefConfig, TelemetryConfig, TelemetryExporterKind,
 };
 use secrets_core::SecretsBroker;
 use secrets_core::crypto::dek_cache::DekCache;
@@ -106,30 +106,13 @@ pub async fn build_state_with_backend(
 }
 
 fn apply_network_env(network: &NetworkConfig) {
-    if let Some(proxy) = &network.proxy {
+    if let Some(proxy) = &network.proxy_url {
         unsafe {
             std::env::set_var("HTTPS_PROXY", proxy);
             std::env::set_var("HTTP_PROXY", proxy);
         }
     }
-    if let Some(no_proxy) = &network.no_proxy {
-        unsafe {
-            std::env::set_var("NO_PROXY", no_proxy);
-        }
-    }
-    if network.offline {
-        unsafe {
-            std::env::set_var("GREENTIC_OFFLINE", "1");
-        }
-    }
-    if matches!(
-        network.tls.mode,
-        greentic_config_types::TlsMode::InsecureSkipVerify
-    ) {
-        unsafe {
-            std::env::set_var("GREENTIC_TLS_INSECURE", "1");
-        }
-    }
+    let _ = network.tls_mode;
 }
 
 fn apply_telemetry_env(telemetry: &TelemetryConfig) {
@@ -146,24 +129,25 @@ fn apply_telemetry_env(telemetry: &TelemetryConfig) {
             std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint);
         }
     }
-    if let Some(sampling) = telemetry.sampling {
+    if telemetry.sampling != 1.0 {
         unsafe {
             std::env::set_var("OTEL_TRACES_SAMPLER", "parentbased_traceidratio");
-            std::env::set_var("OTEL_TRACES_SAMPLER_ARG", sampling.to_string());
+            std::env::set_var("OTEL_TRACES_SAMPLER_ARG", telemetry.sampling.to_string());
         }
     }
-    if let Some(exporter) = &telemetry.exporter {
-        match exporter {
-            TelemetryExporter::Otlp => unsafe {
-                std::env::set_var("OTEL_TRACES_EXPORTER", "otlp");
-                std::env::set_var("OTEL_METRICS_EXPORTER", "otlp");
-            },
-            TelemetryExporter::None => unsafe {
-                std::env::set_var("OTEL_TRACES_EXPORTER", "none");
-                std::env::set_var("OTEL_METRICS_EXPORTER", "none");
-            },
-            _ => {}
-        }
+    match telemetry.exporter {
+        TelemetryExporterKind::Otlp => unsafe {
+            std::env::set_var("OTEL_TRACES_EXPORTER", "otlp");
+            std::env::set_var("OTEL_METRICS_EXPORTER", "otlp");
+        },
+        TelemetryExporterKind::Stdout => unsafe {
+            std::env::set_var("OTEL_TRACES_EXPORTER", "stdout");
+            std::env::set_var("OTEL_METRICS_EXPORTER", "none");
+        },
+        TelemetryExporterKind::None => unsafe {
+            std::env::set_var("OTEL_TRACES_EXPORTER", "none");
+            std::env::set_var("OTEL_METRICS_EXPORTER", "none");
+        },
     }
 }
 

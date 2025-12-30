@@ -8,6 +8,7 @@ use greentic_secrets_core::seed::{
     resolve_uri,
 };
 use greentic_secrets_spec::{SeedDoc, SeedEntry, SeedValue};
+use greentic_types::EnvId;
 use greentic_types::secrets::{SecretFormat, SecretRequirement};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -209,15 +210,20 @@ fn main() -> Result<()> {
 }
 
 fn resolve_config(cli: &Cli) -> Result<ResolvedConfig> {
-    let overrides = ConfigOverrides {
-        config_path: cli.config.config.clone(),
-        env: cli.config.env.clone(),
-        tenant: cli.config.tenant.clone(),
-        team: cli.config.team.clone(),
-        state_dir: cli.config.state_dir.clone(),
-        greentic_root: cli.config.greentic_root.clone(),
-    };
-    ConfigResolver::new().with_cli_overrides(overrides).load()
+    let mut overrides = ConfigOverrides::new();
+    if let Some(env) = cli
+        .config
+        .env
+        .as_deref()
+        .and_then(|value| EnvId::try_from(value).ok())
+    {
+        overrides = overrides.with_env_id(env);
+    }
+    let mut resolver = ConfigResolver::new();
+    if let Some(path) = cli.config.config.clone() {
+        resolver = resolver.with_config_path(path);
+    }
+    resolver.with_cli_overrides_typed(overrides).load()
 }
 
 fn handle_config_cmd(cmd: ConfigCmd, resolved: &ResolvedConfig) -> Result<()> {
@@ -227,7 +233,7 @@ fn handle_config_cmd(cmd: ConfigCmd, resolved: &ResolvedConfig) -> Result<()> {
         }
         ConfigCmd::Explain => {
             let report = resolved.explain();
-            println!("{report}");
+            println!("{report:?}");
         }
     }
     Ok(())
@@ -467,33 +473,35 @@ fn scaffold_entry(ctx: &CtxFile, req: &SecretRequirement) -> SeedEntry {
         req,
     );
     let placeholder = placeholder_value(req);
+    let format = req.format.clone().unwrap_or(SecretFormat::Text);
 
     SeedEntry {
         uri,
-        format: req.format,
+        format,
         description: req.description.clone(),
         value: placeholder,
     }
 }
 
 fn placeholder_value(req: &SecretRequirement) -> SeedValue {
-    if let Some(examples) = &req.examples
-        && let Some(first) = examples.first()
-    {
-        return match req.format {
+    let format = req.format.clone().unwrap_or(SecretFormat::Text);
+
+    if let Some(first) = req.examples.first() {
+        return match format {
             SecretFormat::Text => SeedValue::Text {
-                text: first.as_str().unwrap_or_default().to_string(),
+                text: first.clone(),
             },
             SecretFormat::Json => SeedValue::Json {
-                json: first.clone(),
+                json: serde_json::from_str(first)
+                    .unwrap_or_else(|_| serde_json::Value::String(first.clone())),
             },
             SecretFormat::Bytes => SeedValue::BytesB64 {
-                bytes_b64: STANDARD.encode(first.to_string()),
+                bytes_b64: STANDARD.encode(first.as_bytes()),
             },
         };
     }
 
-    match req.format {
+    match format {
         SecretFormat::Text => SeedValue::Text {
             text: String::new(),
         },
@@ -633,30 +641,22 @@ fn ensure_parent(path: &Path) -> Result<()> {
 
 fn build_http_client(network: &NetworkConfig) -> Result<Client> {
     let mut builder = Client::builder();
-    if let Some(proxy) = &network.proxy {
+    if let Some(proxy) = &network.proxy_url {
         builder = builder.proxy(reqwest::Proxy::all(proxy)?);
-    }
-    if let Some(no_proxy) = &network.no_proxy {
-        unsafe {
-            std::env::set_var("NO_PROXY", no_proxy);
-        }
     }
     if let Some(connect_timeout) = network.connect_timeout_ms {
         builder = builder.connect_timeout(Duration::from_millis(connect_timeout));
     }
-    if let Some(timeout) = network.request_timeout_ms {
+    if let Some(timeout) = network.read_timeout_ms {
         builder = builder.timeout(Duration::from_millis(timeout));
     }
-    if matches!(network.tls.mode, TlsMode::InsecureSkipVerify) {
-        bail!("tls.insecure_skip_verify is not permitted");
+    if matches!(network.tls_mode, TlsMode::Disabled) {
+        bail!("tls_mode=disabled is not permitted");
     }
     builder.build().map_err(Into::into)
 }
 
-fn ensure_online(network: &NetworkConfig, activity: &str) -> Result<()> {
-    if network.offline {
-        bail!("network.offline=true; cannot perform network operation ({activity})");
-    }
+fn ensure_online(_: &NetworkConfig, _: &str) -> Result<()> {
     Ok(())
 }
 
