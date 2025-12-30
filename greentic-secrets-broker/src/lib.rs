@@ -38,6 +38,16 @@ pub struct BrokerRuntimeConfig {
     pub secrets: SecretsBackendRefConfig,
 }
 
+fn effective_backend(config: &SecretsBackendRefConfig) -> SecretsBackendRefConfig {
+    if config.kind == "none" && std::env::var("GREENTIC_DEV_SECRETS_PATH").is_ok() {
+        return SecretsBackendRefConfig {
+            kind: "dev".to_string(),
+            reference: None,
+        };
+    }
+    config.clone()
+}
+
 pub async fn run(config: BrokerRuntimeConfig) -> anyhow::Result<()> {
     apply_network_env(&config.network);
     apply_telemetry_env(&config.telemetry);
@@ -91,6 +101,7 @@ pub async fn build_state() -> anyhow::Result<AppState> {
 pub async fn build_state_with_backend(
     backend: &SecretsBackendRefConfig,
 ) -> anyhow::Result<AppState> {
+    let backend = effective_backend(backend);
     let authorizer = Authorizer::from_env().await?;
     let components = config::load_backend_components(&backend.kind).await?;
     let crypto = EnvelopeService::new(

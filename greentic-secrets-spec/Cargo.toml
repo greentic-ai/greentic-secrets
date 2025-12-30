@@ -15,7 +15,7 @@ include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 default = ["std", "serde"]
 std = []
 serde = ["dep:serde", "dep:serde_json"]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "greentic-types/schema"]
 
 [dependencies]
 thiserror = { workspace = true }
