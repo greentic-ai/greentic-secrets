@@ -1,8 +1,5 @@
 [workspace]
 members = [
-    "crates/greentic-config",
-    "crates/greentic-config-types",
-    "crates/greentic-types",
     "components/secrets-provider-inmemory",
     "components/secrets-provider-aws-sm",
     "components/secrets-provider-azure-kv",
@@ -82,7 +79,7 @@ kube = { version = "2.0", default-features = false, features = ["client", "runti
 rustls-pemfile = "2"
 vaultrs = { version = "0.7", default-features = false, features = ["rustls"] }
 secrets-provider-inmemory = { version = "0.1", path = "components/secrets-provider-inmemory" }
-greentic-types = { version = "0.4", path = "crates/greentic-types", features = ["telemetry-autoinit"] }
+greentic-types = { version = "0.4", features = ["telemetry-autoinit"] }
 url = "2"
 uuid = "1"
 wit-bindgen = "0.50"
@@ -109,6 +106,6 @@ greentic_secrets_provider_azure = { package = "greentic-secrets-provider-azure-k
 greentic_secrets_provider_gcp = { package = "greentic-secrets-provider-gcp-sm", version = "0.4", path = "providers/greentic-gcp-sm" }
 greentic_secrets_provider_vault = { package = "greentic-secrets-provider-vault-kv", version = "0.4", path = "providers/greentic-vault-kv" }
 greentic_secrets_provider_dev_env = { package = "greentic-secrets-provider-dev", version = "0.4", path = "providers/greentic-dev" }
-greentic-config-types = { version = "0.4", path = "crates/greentic-config-types" }
-greentic-config = { version = "0.4", path = "crates/greentic-config" }
+greentic-config-types = { version = "0.4" }
+greentic-config = { version = "0.4" }
 greentic-interfaces = { version = "0.4", default-features = false, features = ["bindings-rust", "provider-core-v1"] }

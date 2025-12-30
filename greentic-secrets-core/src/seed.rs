@@ -139,7 +139,7 @@ fn normalize_seed_entry(entry: &SeedEntry) -> Result<NormalizedSeedEntry> {
 
     Ok(NormalizedSeedEntry {
         uri: entry.uri.clone(),
-        format: entry.format,
+        format: entry.format.clone(),
         bytes,
         description: entry.description.clone(),
     })
@@ -173,10 +173,16 @@ fn find_requirement<'a>(
     let key = format!("{}/{}", uri.category(), uri.name());
     requirements
         .iter()
-        .find(|req| req.key.as_str() == key && scopes_match(uri.scope(), &req.scope))
+        .find(|req| req.key.as_str() == key && scopes_match(uri.scope(), req.scope.as_ref()))
 }
 
-fn scopes_match(uri_scope: &greentic_secrets_spec::Scope, req_scope: &SecretScope) -> bool {
+fn scopes_match(
+    uri_scope: &greentic_secrets_spec::Scope,
+    req_scope: Option<&SecretScope>,
+) -> bool {
+    let Some(req_scope) = req_scope else {
+        return true;
+    };
     uri_scope.env() == req_scope.env
         && uri_scope.tenant() == req_scope.tenant
         && uri_scope.team().map(|t| t.to_string()) == req_scope.team
