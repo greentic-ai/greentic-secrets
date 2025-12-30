@@ -2536,6 +2536,8 @@ name = "greentic-secrets-conformance"
 version = "0.4.10"
 dependencies = [
  "anyhow",
+ "azure_core 0.21.0",
+ "azure_identity 0.21.0",
  "greentic-secrets-provider-aws-sm",
  "greentic-secrets-provider-azure-kv",
  "greentic-secrets-provider-dev",
@@ -2548,6 +2550,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "time",
  "tokio",
  "tracing",
  "uuid",
@@ -2590,6 +2593,7 @@ name = "greentic-secrets-provider-aws-sm"
 version = "0.4.10"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aws-config",
  "aws-sdk-kms",
  "aws-sdk-secretsmanager",
@@ -2610,6 +2614,7 @@ name = "greentic-secrets-provider-azure-kv"
 version = "0.4.10"
 dependencies = [
  "anyhow",
+ "async-trait",
  "azure_core 0.21.0",
  "azure_identity 0.21.0",
  "base64 0.22.1",
@@ -2632,6 +2637,7 @@ dependencies = [
 name = "greentic-secrets-provider-dev"
 version = "0.4.10"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "fs2",
@@ -2650,6 +2656,7 @@ name = "greentic-secrets-provider-gcp-sm"
 version = "0.4.10"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "greentic-secrets-core",
  "greentic-secrets-spec",
@@ -2665,6 +2672,7 @@ name = "greentic-secrets-provider-k8s"
 version = "0.4.10"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "greentic-secrets-core",
  "greentic-secrets-spec",
@@ -2684,6 +2692,7 @@ name = "greentic-secrets-provider-vault-kv"
 version = "0.4.10"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "greentic-secrets-core",
  "greentic-secrets-spec",

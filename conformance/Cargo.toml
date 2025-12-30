@@ -21,12 +21,15 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 once_cell = { workspace = true }
+azure_identity = { version = "0.21", optional = true }
+azure_core = { version = "0.21", optional = true }
+time = { version = "0.3", optional = true }
 
 [features]
 default = []
 provider-dev = ["greentic_secrets_provider_dev"]
 provider-aws = ["greentic_secrets_provider_aws_sm"]
-provider-azure = ["greentic_secrets_provider_azure_kv"]
+provider-azure = ["greentic_secrets_provider_azure_kv", "azure_identity", "azure_core", "time"]
 provider-gcp = ["greentic_secrets_provider_gcp_sm"]
 provider-k8s = ["greentic_secrets_provider_k8s"]
 provider-vault = ["greentic_secrets_provider_vault_kv"]

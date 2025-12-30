@@ -7,13 +7,13 @@ use secrets_provider_aws_sm::build_backend;
 use secrets_provider_tests::{Capabilities, ConformanceSuite, ProviderUnderTest, TestEnv};
 
 use greentic_secrets_spec::{
-    ContentType, Envelope, SecretMeta, SecretRecord, SecretUri, Visibility, types::Scope,
+    ContentType, EncryptionAlgorithm, Envelope, KeyProvider, SecretMeta, SecretRecord, SecretUri,
+    SecretsBackend, Visibility, types::Scope,
 };
 
-#[derive(Clone)]
 struct AwsClient {
-    backend: Box<dyn greentic_secrets_spec::SecretsBackend>,
-    key_provider: Box<dyn greentic_secrets_spec::KeyProvider>,
+    backend: Box<dyn SecretsBackend>,
+    key_provider: Box<dyn KeyProvider>,
 }
 
 impl AwsClient {
@@ -32,13 +32,13 @@ impl AwsClient {
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect::<String>();
-        let scope = Scope::new("int".into(), "aws".into(), None).unwrap();
+        let scope = Scope::new("int", "aws", None).unwrap();
         SecretUri::new(scope, "conformance", safe).unwrap()
     }
 
     fn record(&self, uri: SecretUri, value: Vec<u8>) -> SecretRecord {
         let meta = SecretMeta::new(uri, Visibility::Tenant, ContentType::Text);
-        let algo = Default::default();
+        let algo = EncryptionAlgorithm::Aes256Gcm;
         let nonce = vec![0; algo.nonce_len()];
         let hkdf_salt = Vec::new();
         let wrapped_dek = self
@@ -78,7 +78,9 @@ impl ProviderUnderTest for AwsClient {
 }
 
 fn set_prefix_env(env: &TestEnv) {
-    std::env::set_var("GREENTIC_AWS_SECRET_PREFIX", env.prefix.base());
+    unsafe {
+        std::env::set_var("GREENTIC_AWS_SECRET_PREFIX", env.prefix.base());
+    }
 }
 
 async fn ensure_kms_key() -> Result<()> {
@@ -103,9 +105,11 @@ async fn ensure_kms_key() -> Result<()> {
         .context("failed to create KMS key (localstack)")?;
     let key_id = key
         .key_metadata()
-        .and_then(|meta| meta.key_id())
+        .map(|meta| meta.key_id().to_string())
         .context("missing key id from kms create")?;
-    std::env::set_var("GREENTIC_AWS_KMS_KEY_ID", key_id);
+    unsafe {
+        std::env::set_var("GREENTIC_AWS_KMS_KEY_ID", key_id);
+    }
     Ok(())
 }
 

@@ -36,3 +36,5 @@ serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 rustls-native-certs = "0.8"
 secrets-provider-tests = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }

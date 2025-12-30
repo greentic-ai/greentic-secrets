@@ -39,3 +39,4 @@ secrets-provider-tests = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 azure_identity = "0.21"
 azure_core = "0.21"
+async-trait = { workspace = true }

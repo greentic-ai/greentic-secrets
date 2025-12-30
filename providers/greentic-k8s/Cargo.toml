@@ -35,3 +35,5 @@ serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 secrets-provider-tests = { workspace = true }
 once_cell = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }

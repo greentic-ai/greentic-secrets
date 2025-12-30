@@ -2,21 +2,17 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use once_cell::sync::Lazy;
 use secrets_provider_k8s::build_backend;
 use secrets_provider_tests::{Capabilities, ConformanceSuite, ProviderUnderTest};
 
 use greentic_secrets_spec::{
-    ContentType, Envelope, SecretMeta, SecretRecord, SecretUri, Visibility, types::Scope,
+    ContentType, EncryptionAlgorithm, Envelope, KeyProvider, SecretMeta, SecretRecord, SecretUri,
+    SecretsBackend, Visibility, types::Scope,
 };
 
-static KEY_PROVIDER: Lazy<tokio::sync::Mutex<Option<Box<dyn greentic_secrets_spec::KeyProvider>>>> =
-    Lazy::new(|| tokio::sync::Mutex::new(None));
-
-#[derive(Clone)]
 struct K8sClient {
-    backend: Box<dyn greentic_secrets_spec::SecretsBackend>,
-    key_provider: Box<dyn greentic_secrets_spec::KeyProvider>,
+    backend: Box<dyn SecretsBackend>,
+    key_provider: Box<dyn KeyProvider>,
 }
 
 impl K8sClient {
@@ -33,13 +29,13 @@ impl K8sClient {
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect::<String>();
-        let scope = Scope::new("int".into(), "k8s".into(), None).unwrap();
+        let scope = Scope::new("int", "k8s", None).unwrap();
         SecretUri::new(scope, "conformance", safe).unwrap()
     }
 
     fn record(&self, uri: SecretUri, value: Vec<u8>) -> SecretRecord {
         let meta = SecretMeta::new(uri, Visibility::Tenant, ContentType::Text);
-        let algo = Default::default();
+        let algo = EncryptionAlgorithm::Aes256Gcm;
         let nonce = vec![0; algo.nonce_len()];
         let hkdf_salt = Vec::new();
         let wrapped_dek = self
@@ -78,7 +74,7 @@ impl ProviderUnderTest for K8sClient {
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        let scope = Scope::new("int".into(), "k8s".into(), None).unwrap();
+        let scope = Scope::new("int", "k8s", None).unwrap();
         let items = self.backend.list(&scope, Some("conformance"), None)?;
         Ok(items
             .into_iter()

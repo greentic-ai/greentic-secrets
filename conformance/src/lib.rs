@@ -66,6 +66,8 @@ mod suite {
     use std::time::{SystemTime, UNIX_EPOCH};
     #[cfg(feature = "provider-azure")]
     use std::{env, time::Duration};
+    #[cfg(feature = "provider-azure")]
+    use time::OffsetDateTime;
     use tokio::task;
 
     const CATEGORY: &str = "conformance";
@@ -108,11 +110,19 @@ mod suite {
 
     #[cfg(feature = "provider-azure")]
     struct AzureCredentials {
-        tenant_id: String,
-        client_id: String,
-        client_secret: String,
         scope: String,
         vault_url: String,
+        mode: AzureAuthMode,
+    }
+
+    #[cfg(feature = "provider-azure")]
+    enum AzureAuthMode {
+        ClientSecret {
+            tenant_id: String,
+            client_id: String,
+            client_secret: String,
+        },
+        Default,
     }
 
     #[cfg(feature = "provider-azure")]
@@ -121,31 +131,35 @@ mod suite {
             let mut missing = Vec::new();
             let mut diagnostics = Vec::new();
 
-            let tenant_id = match env::var("AZURE_TENANT_ID") {
-                Ok(value) if !value.trim().is_empty() => value,
-                other => {
-                    missing.push("AZURE_TENANT_ID");
-                    diagnostics.push(format!("AZURE_TENANT_ID resolved to {:?}", other));
-                    String::new()
-                }
-            };
+            let client_secret = env::var("AZURE_CLIENT_SECRET")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+            let mode = if let Some(secret) = client_secret {
+                let tenant_id = match env::var("AZURE_TENANT_ID") {
+                    Ok(value) if !value.trim().is_empty() => value,
+                    other => {
+                        missing.push("AZURE_TENANT_ID");
+                        diagnostics.push(format!("AZURE_TENANT_ID resolved to {:?}", other));
+                        String::new()
+                    }
+                };
 
-            let client_id = match env::var("AZURE_CLIENT_ID") {
-                Ok(value) if !value.trim().is_empty() => value,
-                other => {
-                    missing.push("AZURE_CLIENT_ID");
-                    diagnostics.push(format!("AZURE_CLIENT_ID resolved to {:?}", other));
-                    String::new()
+                let client_id = match env::var("AZURE_CLIENT_ID") {
+                    Ok(value) if !value.trim().is_empty() => value,
+                    other => {
+                        missing.push("AZURE_CLIENT_ID");
+                        diagnostics.push(format!("AZURE_CLIENT_ID resolved to {:?}", other));
+                        String::new()
+                    }
+                };
+                AzureAuthMode::ClientSecret {
+                    tenant_id,
+                    client_id,
+                    client_secret: secret,
                 }
-            };
-
-            let client_secret = match env::var("AZURE_CLIENT_SECRET") {
-                Ok(value) if !value.trim().is_empty() => value,
-                other => {
-                    missing.push("AZURE_CLIENT_SECRET");
-                    diagnostics.push(format!("AZURE_CLIENT_SECRET resolved to {:?}", other));
-                    String::new()
-                }
+            } else {
+                AzureAuthMode::Default
             };
 
             let vault_url = match env::var("AZURE_KEYVAULT_URL")
@@ -176,11 +190,9 @@ mod suite {
                 .unwrap_or_else(|_| "https://vault.azure.net/.default".to_string());
 
             Ok(Self {
-                tenant_id,
-                client_id,
-                client_secret,
                 scope,
                 vault_url,
+                mode,
             })
         }
     }
@@ -196,54 +208,93 @@ mod suite {
 
     #[cfg(feature = "provider-azure")]
     async fn fetch_access_token(creds: &AzureCredentials) -> Result<AzurePreflightInfo, String> {
-        let token_url = format!(
-            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-            creds.tenant_id
-        );
-        let params = [
-            ("client_id", creds.client_id.as_str()),
-            ("client_secret", creds.client_secret.as_str()),
-            ("scope", creds.scope.as_str()),
-            ("grant_type", "client_credentials"),
-        ];
+        match &creds.mode {
+            AzureAuthMode::ClientSecret {
+                tenant_id,
+                client_id,
+                client_secret,
+            } => {
+                let token_url = format!(
+                    "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                    tenant_id
+                );
+                let params = [
+                    ("client_id", client_id.as_str()),
+                    ("client_secret", client_secret.as_str()),
+                    ("scope", creds.scope.as_str()),
+                    ("grant_type", "client_credentials"),
+                ];
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|err| format!("failed to build http client: {err}"))?;
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .map_err(|err| format!("failed to build http client: {err}"))?;
 
-        let response = client
-            .post(&token_url)
-            .form(&params)
-            .send()
-            .await
-            .map_err(|err| format!("token request failed: {err}"))?;
+                let response = client
+                    .post(&token_url)
+                    .form(&params)
+                    .send()
+                    .await
+                    .map_err(|err| format!("token request failed: {err}"))?;
 
-        let status = response.status();
-        let raw_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<body unavailable>".into());
+                let status = response.status();
+                let raw_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<body unavailable>".into());
 
-        if status != StatusCode::OK {
-            return Err(format!(
-                "Azure suite skipped: token endpoint returned {status}. body={raw_body}"
-            ));
+                if status != StatusCode::OK {
+                    return Err(format!(
+                        "Azure suite skipped: token endpoint returned {status}. body={raw_body}"
+                    ));
+                }
+
+                let payload: TokenCheckResponse =
+                serde_json::from_str(&raw_body).map_err(|err| {
+                    format!(
+                        "Azure suite skipped: failed to parse token response: {err}. raw_body={raw_body}"
+                    )
+                })?;
+
+                let expires = payload.expires_in.unwrap_or(3600);
+
+                Ok(AzurePreflightInfo {
+                    scope: creds.scope.clone(),
+                    vault_url: creds.vault_url.clone(),
+                    expires_in: Duration::from_secs(expires.max(60)),
+                })
+            }
+            AzureAuthMode::Default => {
+                use azure_core::auth::TokenCredential;
+                use azure_identity::{DefaultAzureCredential, TokenCredentialOptions};
+
+                let credential = DefaultAzureCredential::create(TokenCredentialOptions::default())
+                    .map_err(|err| {
+                        format!(
+                            "Azure suite skipped: failed to build DefaultAzureCredential: {err}"
+                        )
+                    })?;
+                let token =
+                    credential
+                        .get_token(&[creds.scope.as_str()])
+                        .await
+                        .map_err(|err| {
+                            format!(
+                                "Azure suite skipped: failed to acquire token via DefaultAzureCredential: {err}"
+                            )
+                        })?;
+                let expires = token.expires_on;
+                let now = OffsetDateTime::now_utc();
+                let remaining = expires - now;
+                let expires_in = remaining.whole_seconds().max(3600);
+
+                Ok(AzurePreflightInfo {
+                    scope: creds.scope.clone(),
+                    vault_url: creds.vault_url.clone(),
+                    expires_in: Duration::from_secs(expires_in.max(60) as u64),
+                })
+            }
         }
-
-        let payload: TokenCheckResponse = serde_json::from_str(&raw_body).map_err(|err| {
-            format!(
-                "Azure suite skipped: failed to parse token response: {err}. raw_body={raw_body}"
-            )
-        })?;
-
-        let expires = payload.expires_in.unwrap_or(3600);
-
-        Ok(AzurePreflightInfo {
-            scope: creds.scope.clone(),
-            vault_url: creds.vault_url.clone(),
-            expires_in: Duration::from_secs(expires.max(60)),
-        })
     }
 
     pub(super) fn sanitize(value: &str) -> String {

@@ -30,3 +30,5 @@ serde_json = { workspace = true }
 [dev-dependencies]
 secrets-provider-tests = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+async-trait = { workspace = true }
+anyhow = { workspace = true }

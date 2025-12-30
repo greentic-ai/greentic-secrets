@@ -6,13 +6,13 @@ use secrets_provider_tests::{Capabilities, ConformanceSuite, ProviderUnderTest};
 use secrets_provider_vault_kv::build_backend;
 
 use greentic_secrets_spec::{
-    ContentType, Envelope, SecretMeta, SecretRecord, SecretUri, Visibility, types::Scope,
+    ContentType, EncryptionAlgorithm, Envelope, KeyProvider, SecretMeta, SecretRecord, SecretUri,
+    SecretsBackend, Visibility, types::Scope,
 };
 
-#[derive(Clone)]
 struct VaultClient {
-    backend: Box<dyn greentic_secrets_spec::SecretsBackend>,
-    key_provider: Box<dyn greentic_secrets_spec::KeyProvider>,
+    backend: Box<dyn SecretsBackend>,
+    key_provider: Box<dyn KeyProvider>,
 }
 
 impl VaultClient {
@@ -29,13 +29,13 @@ impl VaultClient {
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect::<String>();
-        let scope = Scope::new("int".into(), "vault".into(), None).unwrap();
+        let scope = Scope::new("int", "vault", None).unwrap();
         SecretUri::new(scope, "conformance", safe).unwrap()
     }
 
     fn record(&self, uri: SecretUri, value: Vec<u8>) -> SecretRecord {
         let meta = SecretMeta::new(uri, Visibility::Tenant, ContentType::Text);
-        let algo = Default::default();
+        let algo = EncryptionAlgorithm::Aes256Gcm;
         let nonce = vec![0; algo.nonce_len()];
         let hkdf_salt = Vec::new();
         let wrapped_dek = self
@@ -74,7 +74,7 @@ impl ProviderUnderTest for VaultClient {
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        let scope = Scope::new("int".into(), "vault".into(), None).unwrap();
+        let scope = Scope::new("int", "vault", None).unwrap();
         let items = self.backend.list(&scope, Some("conformance"), None)?;
         Ok(items
             .into_iter()
