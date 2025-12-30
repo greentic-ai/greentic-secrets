@@ -107,9 +107,11 @@ mod suite {
             Ok(creds) => match fetch_access_token(&creds).await {
                 Ok(auth) => match ensure_wrap_key(&auth, base_prefix).await {
                     Ok(key_name) => {
-                        // Propagate the key name for provider setup.
+                        // Propagate the key name and bearer token for provider setup.
                         unsafe {
-                            std::env::set_var("GREENTIC_AZURE_KEY_NAME", key_name);
+                            std::env::set_var("GREENTIC_AZURE_KEY_NAME", &key_name);
+                            std::env::set_var("GREENTIC_AZURE_BEARER_TOKEN", &auth.bearer);
+                            std::env::set_var("AZURE_KEYVAULT_BEARER_TOKEN", &auth.bearer);
                         }
                         AzurePreflight::Ready(AzurePreflightInfo {
                             scope: auth.scope.clone(),
@@ -243,35 +245,12 @@ mod suite {
 
         let default_name = sanitize(&format!("{base_prefix}-wrap"));
         let base_url = auth.vault_url.trim_end_matches('/');
-        let get_url = format!("{base_url}/keys/{}?api-version=7.4", default_name);
         let create_url = format!("{base_url}/keys/{}/create?api-version=7.4", default_name);
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|err| format!("Azure suite skipped: failed to build http client: {err}"))?;
-
-        // First, see if the key already exists (avoids create permission requirement).
-        let get_resp = client
-            .get(&get_url)
-            .bearer_auth(&auth.bearer)
-            .send()
-            .await
-            .map_err(|err| format!("Azure suite skipped: failed to query wrap key: {err}"))?;
-        match get_resp.status() {
-            StatusCode::OK => return Ok(default_name),
-            StatusCode::NOT_FOUND => { /* fall through to create */ }
-            other => {
-                let body = get_resp
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "<body unavailable>".into());
-                return Err(format!(
-                    "Azure suite skipped: failed to query wrap key (status={other}, body={body}). \
-                     Provide GREENTIC_AZURE_KEY_NAME or grant keys/get permission."
-                ));
-            }
-        }
 
         let payload = serde_json::json!({
             "kty": "RSA",
