@@ -18,7 +18,7 @@ pub async fn run() -> Result<()> {
 
     #[cfg(feature = "provider-azure")]
     {
-        match suite::azure_preflight().await {
+        match suite::azure_preflight(&base_prefix).await {
             suite::AzurePreflight::Ready(info) => {
                 info.log();
                 suite::run_azure(&base_prefix).await?;
@@ -98,11 +98,24 @@ mod suite {
     }
 
     #[cfg(feature = "provider-azure")]
-    pub(super) async fn azure_preflight() -> AzurePreflight {
+    pub(super) async fn azure_preflight(base_prefix: &str) -> AzurePreflight {
         match AzureCredentials::gather() {
             Err(reason) => AzurePreflight::Skipped { reason },
             Ok(creds) => match fetch_access_token(&creds).await {
-                Ok(info) => AzurePreflight::Ready(info),
+                Ok(auth) => match ensure_wrap_key(&auth, base_prefix).await {
+                    Ok(key_name) => {
+                        // Propagate the key name for provider setup.
+                        unsafe {
+                            std::env::set_var("GREENTIC_AZURE_KEY_NAME", key_name);
+                        }
+                        AzurePreflight::Ready(AzurePreflightInfo {
+                            scope: auth.scope.clone(),
+                            vault_url: auth.vault_url.clone(),
+                            expires_in: auth.expires_in,
+                        })
+                    }
+                    Err(reason) => AzurePreflight::Skipped { reason },
+                },
                 Err(reason) => AzurePreflight::Skipped { reason },
             },
         }
@@ -207,7 +220,65 @@ mod suite {
     }
 
     #[cfg(feature = "provider-azure")]
-    async fn fetch_access_token(creds: &AzureCredentials) -> Result<AzurePreflightInfo, String> {
+    struct AzureAuthResult {
+        scope: String,
+        vault_url: String,
+        expires_in: Duration,
+        bearer: String,
+    }
+
+    #[cfg(feature = "provider-azure")]
+    async fn ensure_wrap_key(
+        auth: &AzureAuthResult,
+        base_prefix: &str,
+    ) -> Result<String, String> {
+        if let Ok(existing) = std::env::var("GREENTIC_AZURE_KEY_NAME") {
+            if !existing.trim().is_empty() {
+                return Ok(existing);
+            }
+        }
+
+        let default_name = sanitize(&format!("{base_prefix}-wrap"));
+        let url = format!(
+            "{}/keys/{}/create?api-version=7.4",
+            auth.vault_url.trim_end_matches('/'),
+            default_name
+        );
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|err| format!("Azure suite skipped: failed to build http client: {err}"))?;
+
+        let payload = serde_json::json!({
+            "kty": "RSA",
+            "key_size": 2048
+        });
+
+        let response = client
+            .post(url)
+            .bearer_auth(&auth.bearer)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| format!("Azure suite skipped: failed to create wrap key: {err}"))?;
+
+        let status = response.status();
+        if status.is_success() || status == StatusCode::CONFLICT {
+            return Ok(default_name);
+        }
+
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<body unavailable>".into());
+        Err(format!(
+            "Azure suite skipped: failed to ensure wrap key. status={status}, body={body}"
+        ))
+    }
+
+    #[cfg(feature = "provider-azure")]
+    async fn fetch_access_token(creds: &AzureCredentials) -> Result<AzureAuthResult, String> {
         match &creds.mode {
             AzureAuthMode::ClientSecret {
                 tenant_id,
@@ -258,10 +329,11 @@ mod suite {
 
                 let expires = payload.expires_in.unwrap_or(3600);
 
-                Ok(AzurePreflightInfo {
+                Ok(AzureAuthResult {
                     scope: creds.scope.clone(),
                     vault_url: creds.vault_url.clone(),
                     expires_in: Duration::from_secs(expires.max(60)),
+                    bearer: format!("Bearer {}", payload.access_token),
                 })
             }
             AzureAuthMode::Default => {
@@ -274,24 +346,24 @@ mod suite {
                             "Azure suite skipped: failed to build DefaultAzureCredential: {err}"
                         )
                     })?;
-                let token =
-                    credential
-                        .get_token(&[creds.scope.as_str()])
-                        .await
-                        .map_err(|err| {
-                            format!(
-                                "Azure suite skipped: failed to acquire token via DefaultAzureCredential: {err}"
-                            )
-                        })?;
+                let token = credential
+                    .get_token(&[creds.scope.as_str()])
+                    .await
+                    .map_err(|err| {
+                        format!(
+                            "Azure suite skipped: failed to acquire token via DefaultAzureCredential: {err}"
+                        )
+                    })?;
                 let expires = token.expires_on;
                 let now = OffsetDateTime::now_utc();
                 let remaining = expires - now;
                 let expires_in = remaining.whole_seconds().max(3600);
 
-                Ok(AzurePreflightInfo {
+                Ok(AzureAuthResult {
                     scope: creds.scope.clone(),
                     vault_url: creds.vault_url.clone(),
                     expires_in: Duration::from_secs(expires_in.max(60) as u64),
+                    bearer: format!("Bearer {}", token.token.secret()),
                 })
             }
         }
