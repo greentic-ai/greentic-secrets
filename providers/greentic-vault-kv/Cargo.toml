@@ -11,6 +11,9 @@ keywords = ["secrets", "greentic", "kubernetes", "cloud", "envelope"]
 categories = ["config", "authentication", "cryptography"]
 include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
+[features]
+integration = []
+
 [lib]
 name = "secrets_provider_vault_kv"
 
@@ -26,3 +29,4 @@ serde_json = { workspace = true }
 [dev-dependencies]
 once_cell = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+secrets-provider-tests = { workspace = true }

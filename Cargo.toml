@@ -13,6 +13,7 @@ members = [
     "greentic-secrets",
     "conformance",
     "crates/greentic-secrets-runner",
+    "crates/secrets-provider-tests",
     "providers/greentic-dev",
     "providers/greentic-aws-sm",
     "providers/greentic-gcp-sm",
@@ -106,6 +107,7 @@ greentic_secrets_provider_azure = { package = "greentic-secrets-provider-azure-k
 greentic_secrets_provider_gcp = { package = "greentic-secrets-provider-gcp-sm", version = "0.4", path = "providers/greentic-gcp-sm" }
 greentic_secrets_provider_vault = { package = "greentic-secrets-provider-vault-kv", version = "0.4", path = "providers/greentic-vault-kv" }
 greentic_secrets_provider_dev_env = { package = "greentic-secrets-provider-dev", version = "0.4", path = "providers/greentic-dev" }
+secrets-provider-tests = { path = "crates/secrets-provider-tests" }
 greentic-config-types = { version = "0.4" }
 greentic-config = { version = "0.4" }
 greentic-interfaces = { version = "0.4", default-features = false, features = ["bindings-rust", "provider-core-v1"] }

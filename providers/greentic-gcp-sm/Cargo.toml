@@ -11,6 +11,10 @@ keywords = ["secrets", "greentic", "kubernetes", "cloud", "envelope"]
 categories = ["config", "authentication", "cryptography"]
 include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
+[features]
+integration = []
+real-gcp = []
+
 [lib]
 name = "secrets_provider_gcp_sm"
 
@@ -22,3 +26,7 @@ greentic_secrets_core = { workspace = true }
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+secrets-provider-tests = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

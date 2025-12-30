@@ -1,0 +1,37 @@
+name: Infra Validate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Format check
+        run: terraform fmt -check -recursive infra/ci/terraform
+
+      - name: Validate AWS
+        working-directory: infra/ci/terraform/aws
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate Azure
+        working-directory: infra/ci/terraform/azure
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Validate GCP
+        working-directory: infra/ci/terraform/gcp
+        run: |
+          terraform init -backend=false
+          terraform validate

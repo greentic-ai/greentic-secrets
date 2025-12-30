@@ -4,7 +4,7 @@ use aws_sdk_kms::{Client as KmsClient, primitives::Blob as KmsBlob};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_secretsmanager::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_secretsmanager::operation::list_secret_version_ids::ListSecretVersionIdsError;
-use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType};
+use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType, Tag};
 use aws_types::region::Region;
 use greentic_secrets_core::rt;
 use greentic_secrets_spec::{
@@ -67,6 +67,7 @@ struct AwsProviderConfig {
     kms_key_id: String,
     secrets_endpoint: Option<String>,
     kms_endpoint: Option<String>,
+    resource_tags: Vec<aws_sdk_secretsmanager::types::Tag>,
 }
 
 impl AwsProviderConfig {
@@ -87,6 +88,7 @@ impl AwsProviderConfig {
         let kms_endpoint = env::var(KMS_ENDPOINT_ENV)
             .ok()
             .filter(|s| !s.trim().is_empty());
+        let resource_tags = build_resource_tags();
 
         Ok((
             Self {
@@ -95,6 +97,7 @@ impl AwsProviderConfig {
                 kms_key_id,
                 secrets_endpoint,
                 kms_endpoint,
+                resource_tags,
             },
             shared_config,
         ))
@@ -120,6 +123,24 @@ impl AwsProviderConfig {
             tenant = scope.tenant()
         )
     }
+}
+
+fn build_resource_tags() -> Vec<Tag> {
+    let mut tags = Vec::new();
+    tags.push(Tag::builder().key("greentic-ci").value("true").build());
+    if let Ok(repo) = env::var("GITHUB_REPOSITORY") {
+        tags.push(Tag::builder().key("greentic-repo").value(repo).build());
+    }
+    if let Ok(run_id) = env::var("GITHUB_RUN_ID") {
+        let attempt = env::var("GITHUB_RUN_ATTEMPT").unwrap_or_default();
+        let combined = if attempt.is_empty() {
+            run_id
+        } else {
+            format!("{run_id}/{attempt}")
+        };
+        tags.push(Tag::builder().key("greentic-run").value(combined).build());
+    }
+    tags
 }
 
 #[derive(Clone)]
@@ -228,11 +249,15 @@ impl AwsSecretsBackend {
         let secret_id = secret_id.to_owned();
         let payload = payload.to_owned();
         let description = record.and_then(|rec| rec.meta.description.clone());
+        let config = self.config.clone();
         rt::sync_await(async move {
             let mut request = client
                 .create_secret()
                 .name(secret_id.clone())
                 .secret_string(payload.clone());
+            if !config.resource_tags.is_empty() {
+                request = request.set_tags(Some(config.resource_tags.clone()));
+            }
             if let Some(desc) = description.as_ref()
                 && !desc.is_empty()
             {

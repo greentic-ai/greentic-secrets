@@ -11,6 +11,10 @@ keywords = ["secrets", "greentic", "kubernetes", "cloud", "envelope"]
 categories = ["config", "authentication", "cryptography"]
 include = ["src/**", "README.md", "LICENSE", "Cargo.toml"]
 
+[features]
+integration = []
+real-azure = []
+
 [lib]
 name = "secrets_provider_azure_kv"
 
@@ -31,3 +35,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 serial_test = { workspace = true }
+secrets-provider-tests = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+azure-identity = "0.21"
+azure-core = "0.21"

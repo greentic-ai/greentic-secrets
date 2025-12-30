@@ -1,0 +1,20 @@
+[package]
+name = "secrets-provider-tests"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "Shared conformance test harness for Greentic secrets providers."
+repository = "https://github.com/greentic-ai/greentic-secrets"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+once_cell = { workspace = true }
+rand = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["time", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+

@@ -17,6 +17,7 @@ name = "secrets_provider_k8s"
 [features]
 default = []
 sealedsecrets = []
+integration = []
 
 [dependencies]
 anyhow = { workspace = true }
@@ -32,3 +33,5 @@ url = { workspace = true }
 [dev-dependencies]
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+secrets-provider-tests = { workspace = true }
+once_cell = { workspace = true }

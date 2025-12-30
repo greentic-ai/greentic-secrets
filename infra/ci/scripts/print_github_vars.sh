@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+cat <<'EOF'
+Set these GitHub Repository Variables (non-sensitive):
+- AWS_ROLE_TO_ASSUME
+- AWS_REGION
+- AZURE_CLIENT_ID
+- AZURE_TENANT_ID
+- AZURE_SUBSCRIPTION_ID
+- AZURE_KEYVAULT_NAME
+- GCP_PROJECT_ID
+- GCP_SERVICE_ACCOUNT
+- GCP_WIF_PROVIDER
+EOF
