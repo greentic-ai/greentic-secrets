@@ -18,10 +18,8 @@ impl TestEnv {
         let keep = parse_bool_env("GREENTIC_TEST_KEEP");
         let cleanup = if keep {
             false
-        } else if let Some(value) = env::var("GREENTIC_TEST_CLEANUP").ok() {
+        } else if let Ok(value) = env::var("GREENTIC_TEST_CLEANUP") {
             parse_bool_env_value(&value, true)
-        } else if env::var("CI").is_ok() {
-            true
         } else {
             true
         };

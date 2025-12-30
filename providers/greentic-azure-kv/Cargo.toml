@@ -37,5 +37,5 @@ url = { workspace = true }
 serial_test = { workspace = true }
 secrets-provider-tests = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-azure-identity = "0.21"
-azure-core = "0.21"
+azure_identity = "0.21"
+azure_core = "0.21"
