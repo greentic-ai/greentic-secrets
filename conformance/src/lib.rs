@@ -1,6 +1,6 @@
 mod util;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use uuid::Uuid;
 
 pub async fn run() -> Result<()> {
@@ -24,6 +24,9 @@ pub async fn run() -> Result<()> {
                 suite::run_azure(&base_prefix).await?;
             }
             suite::AzurePreflight::Skipped { reason } => {
+                if suite::must_run("AZURE") {
+                    return Err(anyhow!(reason));
+                }
                 println!("Azure suite skipped: {reason}");
             }
         }
@@ -239,16 +242,36 @@ mod suite {
         }
 
         let default_name = sanitize(&format!("{base_prefix}-wrap"));
-        let url = format!(
-            "{}/keys/{}/create?api-version=7.4",
-            auth.vault_url.trim_end_matches('/'),
-            default_name
-        );
+        let base_url = auth.vault_url.trim_end_matches('/');
+        let get_url = format!("{base_url}/keys/{}?api-version=7.4", default_name);
+        let create_url = format!("{base_url}/keys/{}/create?api-version=7.4", default_name);
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|err| format!("Azure suite skipped: failed to build http client: {err}"))?;
+
+        // First, see if the key already exists (avoids create permission requirement).
+        let get_resp = client
+            .get(&get_url)
+            .bearer_auth(&auth.bearer)
+            .send()
+            .await
+            .map_err(|err| format!("Azure suite skipped: failed to query wrap key: {err}"))?;
+        match get_resp.status() {
+            StatusCode::OK => return Ok(default_name),
+            StatusCode::NOT_FOUND => { /* fall through to create */ }
+            other => {
+                let body = get_resp
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<body unavailable>".into());
+                return Err(format!(
+                    "Azure suite skipped: failed to query wrap key (status={other}, body={body}). \
+                     Provide GREENTIC_AZURE_KEY_NAME or grant keys/get permission."
+                ));
+            }
+        }
 
         let payload = serde_json::json!({
             "kty": "RSA",
@@ -256,7 +279,7 @@ mod suite {
         });
 
         let response = client
-            .post(url)
+            .post(&create_url)
             .bearer_auth(&auth.bearer)
             .json(&payload)
             .send()
@@ -273,7 +296,8 @@ mod suite {
             .await
             .unwrap_or_else(|_| "<body unavailable>".into());
         Err(format!(
-            "Azure suite skipped: failed to ensure wrap key. status={status}, body={body}"
+            "Azure suite skipped: failed to ensure wrap key. status={status}, body={body}. \
+             Provide GREENTIC_AZURE_KEY_NAME or grant keys/create permission."
         ))
     }
 
@@ -612,5 +636,13 @@ mod suite {
         .map_err(|err| anyhow!("provider task panicked: {err}"))??;
 
         Ok(())
+    }
+
+    pub(super) fn must_run(provider: &str) -> bool {
+        let key = format!("GREENTIC_REQUIRE_{}", provider.to_ascii_uppercase());
+        env::var(key)
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
+            .unwrap_or(false)
     }
 }
