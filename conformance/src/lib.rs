@@ -1,6 +1,6 @@
 mod util;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use uuid::Uuid;
 
 pub async fn run() -> Result<()> {
@@ -233,10 +233,7 @@ mod suite {
     }
 
     #[cfg(feature = "provider-azure")]
-    async fn ensure_wrap_key(
-        auth: &AzureAuthResult,
-        base_prefix: &str,
-    ) -> Result<String, String> {
+    async fn ensure_wrap_key(auth: &AzureAuthResult, base_prefix: &str) -> Result<String, String> {
         if let Ok(existing) = std::env::var("GREENTIC_AZURE_KEY_NAME") {
             if !existing.trim().is_empty() {
                 return Ok(existing);
