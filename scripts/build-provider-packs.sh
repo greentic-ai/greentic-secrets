@@ -28,6 +28,7 @@ providers=(
   k8s
   vault-kv
 )
+built_gtpacks=()
 
 bundle_staging="${OUT_DIR}/secrets-providers"
 rm -rf "${bundle_staging}"
@@ -119,10 +120,15 @@ PY
 
   (cd "${OUT_DIR}" && zip -qr "secrets-${slug}.gtpack" "secrets-${slug}")
   echo "::notice::built pack secrets-${slug}.gtpack"
+  built_gtpacks+=("${OUT_DIR}/secrets-${slug}.gtpack")
 
   # Include in bundle deps.
   echo "  - id: greentic.secrets.${slug}" >> "${bundle_staging}/deps.tmp"
 done
+
+if [[ "${#built_gtpacks[@]}" -gt 0 ]]; then
+  "${ROOT_DIR}/scripts/validate-gtpack-extension.sh" "${built_gtpacks[@]}"
+fi
 
 echo "${VERSION}" > "${OUT_DIR}/VERSION"
 

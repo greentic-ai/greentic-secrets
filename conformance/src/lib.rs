@@ -1,6 +1,6 @@
 mod util;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use uuid::Uuid;
 
 pub async fn run() -> Result<()> {
@@ -25,7 +25,7 @@ pub async fn run() -> Result<()> {
             }
             suite::AzurePreflight::Skipped { reason } => {
                 if suite::must_run("AZURE") {
-                    return Err(anyhow!(reason));
+                    return Err(anyhow::anyhow!(reason));
                 }
                 println!("Azure suite skipped: {reason}");
             }
@@ -66,9 +66,10 @@ mod suite {
     use reqwest::StatusCode;
     #[cfg(feature = "provider-azure")]
     use serde::Deserialize;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::env;
     #[cfg(feature = "provider-azure")]
-    use std::{env, time::Duration};
+    use std::time::Duration;
+    use std::time::{SystemTime, UNIX_EPOCH};
     #[cfg(feature = "provider-azure")]
     use time::OffsetDateTime;
     use tokio::task;
@@ -614,6 +615,7 @@ mod suite {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(super) fn must_run(provider: &str) -> bool {
         let key = format!("GREENTIC_REQUIRE_{}", provider.to_ascii_uppercase());
         env::var(key)

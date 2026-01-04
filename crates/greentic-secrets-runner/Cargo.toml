@@ -10,9 +10,11 @@ repository = "https://github.com/greentic-ai/greentic-secrets"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+greentic-types = { workspace = true }
+serde_yaml = { workspace = true }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-serde_yaml = { workspace = true }
 greentic-interfaces = { workspace = true, default-features = false, features = ["bindings-rust", "provider-core-v1"] }
 serde_json = { workspace = true }
 base64 = { workspace = true }

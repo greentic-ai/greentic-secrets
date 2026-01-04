@@ -34,7 +34,9 @@ schemas:
   secrets: schema/secrets-required.schema.json
 metadata: metadata.json
 extensions:
-  greentic.ext.provider:
+  greentic.provider-extension.v1:
+    kind: greentic.provider-extension.v1
+    version: "1.0.0"
     provider:
       id: greentic.secrets.k8s
       runtime:

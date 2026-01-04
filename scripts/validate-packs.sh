@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACK_DIR="${ROOT_DIR}/packs"
+PROVIDER_EXTENSION_ID="greentic.provider-extension.v1"
 
 required_flows=(
   provider_onboard.ygtc
@@ -52,7 +53,8 @@ for pack in "${PACK_DIR}"/*; do
 
   # Basic manifest sanity with python (yaml required fields + provider ext).
   python3 - <<PY
-import sys, yaml, json, pathlib
+import sys, yaml, pathlib
+EXT_ID = "${PROVIDER_EXTENSION_ID}"
 p = pathlib.Path("${manifest}")
 data = yaml.safe_load(p.read_text())
 required_entrypoints = ["onboard","validate","read_secret","write_secret","rotate_secret","export_audit","breakglass"]
@@ -65,8 +67,22 @@ for comp in components:
     if not comp.get("id") or not comp.get("version"):
         print(f"[ERROR] {p}: component missing id/version: {comp}")
         sys.exit(1)
-exts = (data.get("extensions") or {}).get("greentic.ext.provider") or {}
+exts = (data.get("extensions") or {}).get(EXT_ID) or {}
+if not exts:
+    print(f"[ERROR] {p}: missing extensions.{EXT_ID}")
+    sys.exit(1)
+kind = exts.get("kind")
+if kind != EXT_ID:
+    print(f"[ERROR] {p}: provider extension kind must be {EXT_ID}, got {kind!r}")
+    sys.exit(1)
+version = exts.get("version")
+if version != "1.0.0":
+    print(f"[ERROR] {p}: provider extension version must be 1.0.0")
+    sys.exit(1)
 provider = exts.get("provider") or {}
+if not provider:
+    print(f"[ERROR] {p}: provider extension provider block missing")
+    sys.exit(1)
 runtime = provider.get("runtime") or {}
 if runtime.get("world") != "greentic:provider-schema-core/schema-core@1.0.0":
     print(f"[ERROR] {p}: provider extension runtime.world must be greentic:provider-schema-core/schema-core@1.0.0")
