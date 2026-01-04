@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-test:
+  lint:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -15,16 +15,37 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89
       - uses: Swatinem/rust-cache@v2
-      - name: Lint & Test
+        with:
+          shared-key: publish
+      - name: fmt + clippy
         run: |
           cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo build --workspace --all-features
-          cargo test --workspace --all-features -- --nocapture
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: publish
+      - name: cargo test (all features)
+        run: |
+          cargo test --workspace --all-features --locked -- --nocapture
 
   publish:
     if: github.event_name == 'push'
-    needs: build-test
+    needs:
+      - lint
+      - test
     runs-on: ubuntu-latest
     permissions:
       contents: read
