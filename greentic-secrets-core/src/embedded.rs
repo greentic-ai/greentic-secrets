@@ -291,13 +291,11 @@ impl CoreBuilder {
 
         #[cfg(feature = "file")]
         {
-            if let Ok(root) = std::env::var("GREENTIC_SECRETS_FILE_ROOT") {
-                if !root.is_empty() {
-                    builder = builder.backend(
-                        crate::backend::file::FileBackend::new(root),
-                        MemoryKeyProvider::default(),
-                    );
-                }
+            if let Ok(root) = std::env::var("GREENTIC_SECRETS_FILE_ROOT") && !root.is_empty() {
+                builder = builder.backend(
+                    crate::backend::file::FileBackend::new(root),
+                    MemoryKeyProvider::default(),
+                );
             }
         }
 
@@ -589,14 +587,13 @@ fn spawn_invalidation_listener(
 ) {
     let subject = format!("secrets.changed.{tenant}.*");
     tokio::spawn(async move {
-        if let Ok(client) = async_nats::connect(&url).await {
-            if let Ok(mut sub) = client.subscribe(subject).await {
-                while let Some(msg) = sub.next().await {
-                    if let Ok(payload) = serde_json::from_slice::<InvalidationMessage>(&msg.payload)
-                    {
-                        let mut guard = cache.lock().unwrap();
-                        purge_patterns(&mut guard, &payload.uris);
-                    }
+        if let Ok(client) = async_nats::connect(&url).await
+            && let Ok(mut sub) = client.subscribe(subject).await
+        {
+            while let Some(msg) = sub.next().await {
+                if let Ok(payload) = serde_json::from_slice::<InvalidationMessage>(&msg.payload) {
+                    let mut guard = cache.lock().unwrap();
+                    purge_patterns(&mut guard, &payload.uris);
                 }
             }
         }

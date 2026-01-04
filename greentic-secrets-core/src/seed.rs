@@ -150,14 +150,12 @@ fn validate_entry(entry: &SeedEntry, options: &ApplyOptions<'_>) -> Result<()> {
 
     if let Some(reqs) = options.requirements {
         #[cfg(feature = "schema-validate")]
-        if options.validate_schema {
-            if let Some(req) = find_requirement(&uri, reqs) {
-                if let (SecretFormat::Json, Some(schema), SeedValue::Json { json }) =
-                    (&entry.format, &req.schema, &entry.value)
-                {
-                    validate_json_schema(json, schema)?;
-                }
-            }
+        if options.validate_schema
+            && let Some(req) = find_requirement(&uri, reqs)
+            && let (SecretFormat::Json, Some(schema), SeedValue::Json { json }) =
+                (&entry.format, &req.schema, &entry.value)
+        {
+            validate_json_schema(json, schema)?;
         }
         #[cfg(not(feature = "schema-validate"))]
         let _ = find_requirement(&uri, reqs);

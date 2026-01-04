@@ -57,7 +57,7 @@ impl ProviderUnderTest for DevClient {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         let uri = self.uri_for(key);
         let found = self.backend.get(&uri, None)?;
-        Ok(found.map(|v| v.record).flatten().map(|r| r.value))
+        Ok(found.and_then(|v| v.record).map(|r| r.value))
     }
 
     async fn delete(&self, key: &str) -> Result<()> {

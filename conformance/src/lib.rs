@@ -235,10 +235,10 @@ mod suite {
 
     #[cfg(feature = "provider-azure")]
     async fn ensure_wrap_key(auth: &AzureAuthResult, base_prefix: &str) -> Result<String, String> {
-        if let Ok(existing) = std::env::var("GREENTIC_AZURE_KEY_NAME") {
-            if !existing.trim().is_empty() {
-                return Ok(existing);
-            }
+        if let Ok(existing) = std::env::var("GREENTIC_AZURE_KEY_NAME")
+            && !existing.trim().is_empty()
+        {
+            return Ok(existing);
         }
 
         let default_name = sanitize(&format!("{base_prefix}-wrap"));
