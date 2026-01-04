@@ -291,7 +291,9 @@ impl CoreBuilder {
 
         #[cfg(feature = "file")]
         {
-            if let Ok(root) = std::env::var("GREENTIC_SECRETS_FILE_ROOT") && !root.is_empty() {
+            if let Ok(root) = std::env::var("GREENTIC_SECRETS_FILE_ROOT")
+                && !root.is_empty()
+            {
                 builder = builder.backend(
                     crate::backend::file::FileBackend::new(root),
                     MemoryKeyProvider::default(),

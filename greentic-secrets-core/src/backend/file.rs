@@ -131,14 +131,18 @@ impl SecretsBackend for FileBackend {
         for category_entry in read_dir_filtered(&base)? {
             let category_name = category_entry.0;
             let category_path = category_entry.1;
-            if let Some(prefix) = category_prefix && !category_name.starts_with(prefix) {
+            if let Some(prefix) = category_prefix
+                && !category_name.starts_with(prefix)
+            {
                 continue;
             }
 
             for secret_entry in read_dir_filtered(&category_path)? {
                 let secret_name = secret_entry.0;
                 let secret_path = secret_entry.1;
-                if let Some(prefix) = name_prefix && !secret_name.starts_with(prefix) {
+                if let Some(prefix) = name_prefix
+                    && !secret_name.starts_with(prefix)
+                {
                     continue;
                 }
 
