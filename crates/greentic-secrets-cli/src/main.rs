@@ -784,7 +784,7 @@ fn read_requirements_from_zip(
     let mut data = Vec::new();
     io::Read::read_to_end(&mut file, &mut data)
         .context("failed to read secret requirements from gtpack")?;
-    let reqs: Vec<SecretRequirement> = serde_json::from_slice(&data)
-        .context("gtpack secret requirements are not valid JSON")?;
+    let reqs: Vec<SecretRequirement> =
+        serde_json::from_slice(&data).context("gtpack secret requirements are not valid JSON")?;
     Ok(Some(reqs))
 }

@@ -66,6 +66,9 @@ cargo run -p greentic-secrets-broker --example broker_startup
 
 ### CLI quick start
 ```bash
+# Install the CLI
+cargo binstall greentic-secrets
+
 # Prepare local dev store and context
 greentic-secrets dev up
 greentic-secrets ctx set --env dev --tenant example --team _

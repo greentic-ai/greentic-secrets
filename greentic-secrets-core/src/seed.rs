@@ -36,13 +36,7 @@ impl DevContext {
 pub fn resolve_uri(ctx: &DevContext, req: &SecretRequirement) -> String {
     let team = ctx.team.as_deref().unwrap_or("_");
     let key = normalize_req_key(req.key.as_str());
-    format!(
-        "secrets://{}/{}/{}/{}",
-        ctx.env,
-        ctx.tenant,
-        team,
-        key
-    )
+    format!("secrets://{}/{}/{}/{}", ctx.env, ctx.tenant, team, key)
 }
 
 /// Normalized seed entry with bytes payload.
@@ -170,12 +164,9 @@ fn find_requirement<'a>(
     requirements: &'a [SecretRequirement],
 ) -> Option<&'a SecretRequirement> {
     let key = format!("{}/{}", uri.category(), uri.name());
-    requirements
-        .iter()
-        .find(|req| {
-            normalize_req_key(req.key.as_str()) == key
-                && scopes_match(uri.scope(), req.scope.as_ref())
-        })
+    requirements.iter().find(|req| {
+        normalize_req_key(req.key.as_str()) == key && scopes_match(uri.scope(), req.scope.as_ref())
+    })
 }
 
 fn normalize_req_key(key: &str) -> String {
