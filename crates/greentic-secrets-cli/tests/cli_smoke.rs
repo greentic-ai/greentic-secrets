@@ -6,7 +6,7 @@ fn cli_cmd(tmp: &TempDir) -> Command {
     let root = tmp.path().join("greentic-root");
     let state = root.join("state");
     fs::create_dir_all(&state).expect("state dir");
-    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("greentic-secrets-cli");
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("greentic-secrets");
     cmd.current_dir(tmp.path())
         .arg("--greentic-root")
         .arg(root)

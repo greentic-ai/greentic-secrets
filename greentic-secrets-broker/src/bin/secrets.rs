@@ -87,7 +87,7 @@ enum Component {
     Weather,
 }
 
-#[greentic_types::telemetry::main(service_name = "greentic-secrets-cli")]
+#[greentic_types::telemetry::main(service_name = "greentic-secrets")]
 async fn main() {
     if let Err(err) = real_main().await {
         eprintln!("secrets CLI failed: {err:#}");

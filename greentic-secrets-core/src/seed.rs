@@ -35,12 +35,13 @@ impl DevContext {
 /// Resolve a requirement into a concrete URI for dev flows.
 pub fn resolve_uri(ctx: &DevContext, req: &SecretRequirement) -> String {
     let team = ctx.team.as_deref().unwrap_or("_");
+    let key = normalize_req_key(req.key.as_str());
     format!(
         "secrets://{}/{}/{}/{}",
         ctx.env,
         ctx.tenant,
         team,
-        req.key.as_str()
+        key
     )
 }
 
@@ -171,7 +172,19 @@ fn find_requirement<'a>(
     let key = format!("{}/{}", uri.category(), uri.name());
     requirements
         .iter()
-        .find(|req| req.key.as_str() == key && scopes_match(uri.scope(), req.scope.as_ref()))
+        .find(|req| {
+            normalize_req_key(req.key.as_str()) == key
+                && scopes_match(uri.scope(), req.scope.as_ref())
+        })
+}
+
+fn normalize_req_key(key: &str) -> String {
+    let normalized = key.to_ascii_lowercase();
+    if normalized.contains('/') {
+        normalized
+    } else {
+        format!("configs/{normalized}")
+    }
 }
 
 fn scopes_match(uri_scope: &greentic_secrets_spec::Scope, req_scope: Option<&SecretScope>) -> bool {

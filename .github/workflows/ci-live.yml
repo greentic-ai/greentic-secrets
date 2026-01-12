@@ -79,8 +79,13 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
       - name: Live conformance (GCP SM)
         env:
           GTS_GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GREENTIC_GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GREENTIC_GCP_KMS_KEY: ${{ vars.GCP_KMS_KEY }}
+          GREENTIC_GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          GREENTIC_REQUIRE_GCP: "1"
           GTS_PREFIX: gtc-${{ github.run_id }}
         run: cargo run -p greentic-secrets-conformance --features provider-gcp

@@ -67,18 +67,18 @@ cargo run -p greentic-secrets-broker --example broker_startup
 ### CLI quick start
 ```bash
 # Prepare local dev store and context
-cargo run -p greentic-secrets-cli -- dev up
-cargo run -p greentic-secrets-cli -- ctx set --env dev --tenant example --team _
+greentic-secrets dev up
+greentic-secrets ctx set --env dev --tenant example --team _
 
 # Scaffold seed template from a pack metadata file containing secret_requirements
-# (JSON/YAML or .gtpack zip with metadata.json)
-cargo run -p greentic-secrets-cli -- scaffold --pack path/to/pack.gtpack --out seeds.yaml
+# (JSON/YAML or .gtpack zip with metadata.json or assets/secret-requirements.json)
+greentic-secrets scaffold --pack path/to/pack.gtpack --out seeds.yaml
 
 # Fill interactively (or use --from-dotenv)
-cargo run -p greentic-secrets-cli -- wizard -i seeds.yaml -o seeds.yaml
+greentic-secrets wizard -i seeds.yaml -o seeds.yaml
 
 # Apply to local dev store (default) or pass --broker-url to target the broker HTTP API
-cargo run -p greentic-secrets-cli -- apply -f seeds.yaml
+greentic-secrets apply -f seeds.yaml
 ```
 
 See `docs/seed-format.md` for the seed schema used by scaffold/wizard/apply.

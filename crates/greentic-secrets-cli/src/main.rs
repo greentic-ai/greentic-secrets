@@ -364,11 +364,15 @@ fn handle_apply(cmd: ApplyCmd, resolved: &ResolvedConfig) -> Result<()> {
             Box::new(HttpStore::with_client(client, url, cmd.token))
         }
         None => {
-            if resolved.config.secrets.kind != "dev" {
+            let kind = resolved.config.secrets.kind.as_str();
+            if kind != "dev" && kind != "none" {
                 anyhow::bail!(
                     "secrets.kind={} requires --broker-url (or set secrets.kind=dev)",
                     resolved.config.secrets.kind
                 );
+            }
+            if kind == "none" {
+                eprintln!("warning: secrets.kind=none; using dev store for CLI apply");
             }
             Box::new(
                 DevStore::with_path(
@@ -516,10 +520,8 @@ fn read_pack_requirements(path: &Path) -> Result<Vec<SecretRequirement>> {
     let bytes =
         fs::read(path).with_context(|| format!("failed to read pack {}", path.display()))?;
 
-    if looks_like_zip(&bytes)
-        && let Ok(reqs) = read_gtpack_zip(&bytes)
-    {
-        return Ok(reqs);
+    if looks_like_zip(&bytes) {
+        return read_gtpack_zip(&bytes);
     }
 
     if let Ok(meta) = serde_json::from_slice::<PackMetadata>(&bytes) {
@@ -728,7 +730,21 @@ fn looks_like_zip(bytes: &[u8]) -> bool {
 fn read_gtpack_zip(bytes: &[u8]) -> Result<Vec<SecretRequirement>> {
     let cursor = io::Cursor::new(bytes);
     let mut archive = ZipArchive::new(cursor).context("failed to open gtpack zip")?;
-    let mut last_err = None;
+    let mut last_err: Option<anyhow::Error> = None;
+    for name in &[
+        "assets/secret-requirements.json",
+        "assets/secret_requirements.json",
+        "secret-requirements.json",
+        "secret_requirements.json",
+    ] {
+        match read_requirements_from_zip(&mut archive, name) {
+            Ok(Some(reqs)) => return Ok(reqs),
+            Ok(None) => {}
+            Err(err) => {
+                last_err = Some(err);
+            }
+        }
+    }
     for name in &[
         "metadata.json",
         "pack-metadata.json",
@@ -745,11 +761,30 @@ fn read_gtpack_zip(bytes: &[u8]) -> Result<Vec<SecretRequirement>> {
                 return Ok(meta.secret_requirements);
             }
             Err(err) => {
-                last_err = Some(err);
+                last_err = Some(err.into());
             }
         }
     }
+    if archive.by_name("manifest.cbor").is_ok() {
+        return Ok(Vec::new());
+    }
     Err(anyhow::anyhow!(
-        "gtpack missing metadata.json ({last_err:?})"
+        "gtpack missing metadata or secret requirements ({last_err:?})"
     ))
+}
+
+fn read_requirements_from_zip(
+    archive: &mut ZipArchive<io::Cursor<&[u8]>>,
+    name: &str,
+) -> Result<Option<Vec<SecretRequirement>>> {
+    let mut file = match archive.by_name(name) {
+        Ok(file) => file,
+        Err(_) => return Ok(None),
+    };
+    let mut data = Vec::new();
+    io::Read::read_to_end(&mut file, &mut data)
+        .context("failed to read secret requirements from gtpack")?;
+    let reqs: Vec<SecretRequirement> = serde_json::from_slice(&data)
+        .context("gtpack secret requirements are not valid JSON")?;
+    Ok(Some(reqs))
 }

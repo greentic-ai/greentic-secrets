@@ -43,7 +43,7 @@ lru = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 async-nats = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
-reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls", "query", "form"] }
 tracing = { workspace = true }
 greentic_secrets_api = { workspace = true }
 greentic_secrets_spec = { workspace = true }

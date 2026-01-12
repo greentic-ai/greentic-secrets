@@ -24,7 +24,7 @@ clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
 hyper = { workspace = true, features = ["full"] }
 jsonwebtoken = { workspace = true, default-features = false, features = ["use_pem", "rust_crypto"] }
-reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls"] }
 rustls = { workspace = true, default-features = false, features = ["std"] }
 ring = { workspace = true, features = ["std"] }
 schemars = { workspace = true }
