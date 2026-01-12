@@ -1,5 +1,5 @@
 use futures::executor::block_on;
-use greentic_secrets::{EnvSecretsManager, SecretsManager};
+use greentic_secrets_lib::{EnvSecretsManager, SecretsManager};
 
 #[test]
 fn read_from_env() {

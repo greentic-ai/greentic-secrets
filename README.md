@@ -95,7 +95,7 @@ greentic-secrets-core = "0.1"
 greentic-secrets-provider-dev = "0.1"
 
 # Or via the umbrella crate re-exports
-greentic-secrets = { version = "0.1", features = ["providers-dev"] }
+greentic-secrets-lib = { version = "0.1", features = ["providers-dev"] }
 ```
 
 ```rust
@@ -112,8 +112,8 @@ let core = SecretsCore::builder()
 # });
 
 // Umbrella crate re-export
-use greentic_secrets::core::SecretsCore as UmbrellaCore;
-use greentic_secrets::dev::DevBackend as UmbrellaDevBackend;
+use greentic_secrets_lib::core::SecretsCore as UmbrellaCore;
+use greentic_secrets_lib::dev::DevBackend as UmbrellaDevBackend;
 
 # tokio::runtime::Runtime::new().unwrap().block_on(async {
 let umbrella_core = UmbrellaCore::builder()

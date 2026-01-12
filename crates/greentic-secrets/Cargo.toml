@@ -1,5 +1,5 @@
 [package]
-name = "greentic-secrets-cli"
+name = "greentic-secrets"
 version.workspace = true
 edition.workspace = true
 license = "MIT"

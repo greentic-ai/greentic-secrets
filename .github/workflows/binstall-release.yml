@@ -54,7 +54,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build greentic-secrets
-        run: cargo build --release -p greentic-secrets-cli
+        run: cargo build --release -p greentic-secrets
 
       - name: Package (unix)
         if: runner.os != 'Windows'

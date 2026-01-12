@@ -2491,25 +2491,31 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
- "async-trait",
- "futures",
- "greentic-secrets-api",
+ "anyhow",
+ "assert_cmd",
+ "base64 0.22.1",
+ "clap",
+ "greentic-config",
+ "greentic-config-types",
  "greentic-secrets-core",
- "greentic-secrets-provider-aws-sm",
- "greentic-secrets-provider-azure-kv",
- "greentic-secrets-provider-dev",
- "greentic-secrets-provider-gcp-sm",
- "greentic-secrets-provider-k8s",
- "greentic-secrets-provider-vault-kv",
  "greentic-secrets-spec",
  "greentic-types",
+ "predicates",
+ "reqwest 0.13.1",
+ "serde",
+ "serde_json",
+ "serde_yaml_bw",
+ "tempfile",
+ "tokio",
+ "toml",
+ "zip",
 ]
 
 [[package]]
 name = "greentic-secrets-api"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2518,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-broker"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2557,32 +2563,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "greentic-secrets-cli"
-version = "0.4.12"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "base64 0.22.1",
- "clap",
- "greentic-config",
- "greentic-config-types",
- "greentic-secrets-core",
- "greentic-secrets-spec",
- "greentic-types",
- "predicates",
- "reqwest 0.13.1",
- "serde",
- "serde_json",
- "serde_yaml_bw",
- "tempfile",
- "tokio",
- "toml",
- "zip",
-]
-
-[[package]]
 name = "greentic-secrets-conformance"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "azure_core 0.21.0",
@@ -2607,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-core"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -2638,8 +2620,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "greentic-secrets-lib"
+version = "0.4.13"
+dependencies = [
+ "async-trait",
+ "futures",
+ "greentic-secrets-api",
+ "greentic-secrets-core",
+ "greentic-secrets-provider-aws-sm",
+ "greentic-secrets-provider-azure-kv",
+ "greentic-secrets-provider-dev",
+ "greentic-secrets-provider-gcp-sm",
+ "greentic-secrets-provider-k8s",
+ "greentic-secrets-provider-vault-kv",
+ "greentic-secrets-spec",
+ "greentic-types",
+]
+
+[[package]]
 name = "greentic-secrets-provider-aws-sm"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2660,7 +2660,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-azure-kv"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2684,7 +2684,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-dev"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2702,7 +2702,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-gcp-sm"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-k8s"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2738,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-provider-vault-kv"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-runner"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "base64 0.22.1",
  "greentic-interfaces",
@@ -2770,7 +2770,7 @@ dependencies = [
 
 [[package]]
 name = "greentic-secrets-spec"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "async-trait",
  "greentic-types",
@@ -4665,7 +4665,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
 dependencies = [
  "rand_chacha 0.9.0",
- "rand_core 0.9.3",
+ "rand_core 0.9.4",
 ]
 
 [[package]]
@@ -4695,7 +4695,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
- "rand_core 0.9.3",
+ "rand_core 0.9.4",
 ]
 
 [[package]]
@@ -4718,9 +4718,9 @@ dependencies = [
 
 [[package]]
 name = "rand_core"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
+checksum = "4f1b3bc831f92381018fd9c6350b917c7b21f1eed35a65a51900e0e55a3d7afa"
 dependencies = [
  "getrandom 0.3.4",
 ]
@@ -5390,7 +5390,7 @@ dependencies = [
 
 [[package]]
 name = "secrets-provider-tests"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "async-trait",
