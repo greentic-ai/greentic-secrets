@@ -1,0 +1,46 @@
+name: Secrets Validator Component
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.89 with wasm target
+        uses: dtolnay/rust-toolchain@1.89
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq rsync zip
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Login to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${GHCR_TOKEN}" | oras login ghcr.io -u "${GHCR_USER}" --password-stdin
+
+      - name: Publish validator component to GHCR
+        run: ./scripts/publish-validators.sh
+
+      - name: Build validator pack
+        run: ./scripts/build-validator-pack.sh
+
+      - name: Upload validator pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: validators-secrets-pack
+          path: dist/validators-secrets.gtpack

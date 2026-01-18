@@ -1,0 +1,14 @@
+[package]
+name = "greentic-secrets-pack-validator"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "WASM pack validator enforcing secrets-domain safety rules."
+repository = "https://github.com/greentic-ai/greentic-secrets"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+greentic-types = { version = "0.4", default-features = false, features = ["std", "serde"] }
+wit-bindgen = { workspace = true }
