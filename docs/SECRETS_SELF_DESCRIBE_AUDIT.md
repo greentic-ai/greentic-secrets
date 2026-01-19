@@ -5,7 +5,7 @@
 - Consumers can render requirements to JSON Schema via `specs_to_json_schema` in `greentic-secrets-core/src/spec_schema.rs` and via the `secrets` CLI in `greentic-secrets-broker/src/bin/secrets.rs`.
 - A parallel, richer requirements model exists as `SecretRequirement` (required flag, scope, format, schema, examples) in `crates/greentic-types/src/secrets.rs`, used by the `greentic-secrets` CLI to scaffold seeds.
 - Seeded values are structured with `SeedDoc`/`SeedEntry` and apply/validation logic in `greentic-secrets-core/src/seed.rs` and schema docs in `docs/seed-format.md`.
-- Provider packs ship explicit JSON schemas (`schema/config.schema.json`, `schema/secrets-required.schema.json`) referenced from `packs/*/gtpack.yaml` and flows, enabling UI/automation around requirements and config.
+- Provider packs ship explicit JSON schemas (`schema/config.schema.json`, `schema/secrets-required.schema.json`) referenced from `packs/*/pack.yaml` and flows, enabling UI/automation around requirements and config.
 - Secrets are normalized into a canonical URI scheme (`secrets://<env>/<tenant>/<team|_>/<category>/<name>`) in `greentic-secrets-spec/src/uri.rs` and reused across helper APIs (`greentic-secrets-core/src/provider_secrets.rs`).
 - Embedded access enforces tenant/team scoping in `greentic-secrets-core/src/embedded.rs`; the broker enforces tenant/team/role constraints in `greentic-secrets-broker/src/auth.rs` and routes in `greentic-secrets-broker/src/http.rs`.
 - Backend selection can be automated via probes (IMDS) or explicit config in `greentic-secrets-core/src/embedded.rs` and `greentic-secrets-core/src/resolver.rs`.
@@ -23,7 +23,7 @@
 - `specs_to_json_schema` converts `SecretSpec` lists into a JSON Schema object (`greentic-secrets-core/src/spec_schema.rs`).
 - `SecretRequirement` (required flag, scope, format, schema, examples) is the canonical structured requirement model (`crates/greentic-types/src/secrets.rs`).
 - Seed documents for initialization use `SeedDoc`/`SeedEntry` and `SeedValue` (`greentic-secrets-spec/src/requirements.rs`, `greentic-secrets-core/src/seed.rs`, `docs/seed-format.md`).
-- Provider pack metadata and schemas live under `packs/*/gtpack.yaml` and `packs/*/schema/*.schema.json` (for config and secrets-required), with flow schemas referenced from `packs/*/flows/*.ygtc`.
+- Provider pack metadata and schemas live under `packs/*/pack.yaml` and `packs/*/schema/*.schema.json` (for config and secrets-required), with flow schemas referenced from `packs/*/flows/*.ygtc`.
 - The provider schema WIT interface includes `describe()` and `validate_config()` for self-description/validation (`components/common/schema_core_api.rs`).
 
 **Source of truth**

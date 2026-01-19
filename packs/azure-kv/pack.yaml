@@ -1,0 +1,77 @@
+pack_id: greentic.secrets.azure-kv
+version: __PACK_VERSION__
+kind: provider
+publisher: Greentic
+components: []
+dependencies: []
+flows:
+- id: provider_onboard
+  file: flows/provider_onboard.ygtc
+  tags: []
+  entrypoints:
+  - onboard
+- id: provider_validate
+  file: flows/provider_validate.ygtc
+  tags: []
+  entrypoints:
+  - validate
+- id: provider_read_secret
+  file: flows/provider_read_secret.ygtc
+  tags: []
+  entrypoints:
+  - read_secret
+- id: provider_write_secret
+  file: flows/provider_write_secret.ygtc
+  tags: []
+  entrypoints:
+  - write_secret
+- id: provider_rotate_secret
+  file: flows/provider_rotate_secret.ygtc
+  tags: []
+  entrypoints:
+  - rotate_secret
+- id: provider_export_audit
+  file: flows/provider_export_audit.ygtc
+  tags: []
+  entrypoints:
+  - export_audit
+- id: provider_breakglass
+  file: flows/provider_breakglass.ygtc
+  tags: []
+  entrypoints:
+  - breakglass
+assets:
+- path: metadata.json
+- path: schema/config.schema.json
+- path: schema/secrets-required.schema.json
+- path: schema/state.schema.json
+extensions:
+  greentic.provider-extension.v1:
+    kind: greentic.provider-extension.v1
+    version: 1.0.0
+    inline:
+      providers:
+      - provider_type: greentic.secrets.azure-kv
+        config_schema_ref: assets/schema/config.schema.json
+        runtime:
+          world: greentic:provider/schema-core@1.0.0
+          component_ref: ghcr.io/greentic-ai/components/greentic.secrets.provider.azure_kv:__PACK_VERSION__
+          export: invoke
+        capabilities:
+        - secrets
+        ops:
+        - breakglass
+        - export_audit
+        - onboard
+        - read_secret
+        - rotate_secret
+        - validate
+        - write_secret
+  greentic.secrets.validators.v1:
+    kind: greentic.secrets.validators.v1
+    version: 1.0.0
+    inline:
+      validators:
+      - id: greentic.validators.secrets
+        world: greentic:pack-validate/pack-validator@0.1.0
+        component_ref: ghcr.io/greentic-ai/validators/secrets:__PACK_VERSION__

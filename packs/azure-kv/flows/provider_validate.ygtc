@@ -1,35 +1,33 @@
-schema_version: flow-v1
+schema_version: 1
 id: provider_validate
-kind: event
+type: event
 entrypoints:
   default: {}
 nodes:
   validate_config:
-    component:
-      id: greentic.secrets.policy_validator
-      operation: validate_config
-    input:
+    telemetry:
+      span: provider.validate.config
+    operation: validate_config
+    component.exec:
       config: ${inputs.config}
-      schema_ref: schema/config.schema.json
-    telemetry: { span: provider.validate.config }
-
+      schema_ref: assets/schema/config.schema.json
+      component: greentic.secrets.policy_validator
   health_check:
     after: validate_config
-    component:
-      id: greentic.secrets.provider.azure_kv
-      operation: health_check
-    input:
-      config: ${inputs.config}
-    telemetry: { span: provider.validate.health }
+    telemetry:
+      span: provider.validate.health
     output:
       validation_report: ${data.report}
-
+    operation: health_check
+    component.exec:
+      config: ${inputs.config}
+      component: greentic.secrets.provider.azure_kv
   audit:
     after: health_check
-    component:
-      id: greentic.secrets.audit_exporter
-      operation: emit_event
-    input:
+    telemetry:
+      span: provider.validate.audit
+    operation: emit_event
+    component.exec:
       sink: ${inputs.config.audit}
       event:
         kind: PROVIDER_VALIDATED
@@ -37,8 +35,7 @@ nodes:
         status: ${health_check.output.validation_report.status}
         correlation_id: ${inputs.correlation_id}
         report_ref: validation_report.json
-    telemetry: { span: provider.validate.audit }
-
+      component: greentic.secrets.audit_exporter
 outputs:
   status: ${health_check.output.validation_report.status}
   provider:
@@ -48,7 +45,7 @@ outputs:
     environment: ${inputs.config.environment}
   correlation_id: ${inputs.correlation_id}
   audit_events:
-    - ${audit.input.event}
+  - ${audit.input.event}
   artifacts:
-    - path: validation_report.json
-      content: ${health_check.output.validation_report}
+  - path: validation_report.json
+    content: ${health_check.output.validation_report}

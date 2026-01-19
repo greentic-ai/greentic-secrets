@@ -1,76 +1,70 @@
-schema_version: flow-v1
+schema_version: 1
 id: provider_onboard
-kind: event
+type: event
 entrypoints:
   default: {}
 nodes:
   validate_config:
-    component:
-      id: greentic.secrets.policy_validator
-      operation: validate_config
-    input:
+    telemetry:
+      span: provider.onboard.validate_config
+    operation: validate_config
+    component.exec:
       config: ${inputs.config}
-      schema_ref: schema/config.schema.json
-    telemetry: { span: provider.onboard.validate_config }
-
+      schema_ref: assets/schema/config.schema.json
+      component: greentic.secrets.policy_validator
   auth:
     after: validate_config
-    component:
-      id: greentic.secrets.provider.aws_sm
-      operation: assume_identity
-    input:
+    telemetry:
+      span: provider.onboard.auth
+    operation: assume_identity
+    component.exec:
       config: ${inputs.config}
       secrets: ${inputs.secrets}
-    telemetry: { span: provider.onboard.auth }
-
+      component: greentic.secrets.provider.aws_sm
   connectivity:
     after: auth
-    component:
-      id: greentic.secrets.provider.aws_sm
-      operation: connectivity_test
-    input:
+    telemetry:
+      span: provider.onboard.connectivity
+    operation: connectivity_test
+    component.exec:
       config: ${inputs.config}
-    telemetry: { span: provider.onboard.connectivity }
-
+      component: greentic.secrets.provider.aws_sm
   permissions:
     after: connectivity
-    component:
-      id: greentic.secrets.provider.aws_sm
-      operation: permissions_test
-    input:
+    telemetry:
+      span: provider.onboard.permissions
+    operation: permissions_test
+    component.exec:
       config: ${inputs.config}
-    telemetry: { span: provider.onboard.permissions }
-
+      component: greentic.secrets.provider.aws_sm
   ensure_namespace:
     after: permissions
-    component:
-      id: greentic.secrets.provider.aws_sm
-      operation: ensure_namespace
-    input:
+    telemetry:
+      span: provider.onboard.ensure_namespace
+    operation: ensure_namespace
+    component.exec:
       config: ${inputs.config}
-    telemetry: { span: provider.onboard.ensure_namespace }
-
+      component: greentic.secrets.provider.aws_sm
   registration:
     after: ensure_namespace
-    component:
-      id: greentic.secrets.provider.aws_sm
-      operation: record_registration
-    input:
+    telemetry:
+      span: provider.onboard.registration
+    output:
+      registration_id: ${data.registration_id}
+    operation: record_registration
+    component.exec:
       config: ${inputs.config}
       capabilities:
         rotate: true
         versioning: true
         tags: true
-    telemetry: { span: provider.onboard.registration }
-    output:
-      registration_id: ${data.registration_id}
-
+      component: greentic.secrets.provider.aws_sm
   audit:
     after: registration
-    component:
-      id: greentic.secrets.audit_exporter
-      operation: emit_event
-    input:
+    telemetry:
+      span: provider.onboard.audit
+    operation: emit_event
+    component.exec:
       sink: ${inputs.config.audit}
       event:
         kind: PROVIDER_ONBOARDED
@@ -78,8 +72,7 @@ nodes:
         status: READY
         registration_id: ${registration.output.registration_id}
         correlation_id: ${inputs.correlation_id}
-    telemetry: { span: provider.onboard.audit }
-
+      component: greentic.secrets.audit_exporter
 outputs:
   status: OK
   provider:
@@ -94,5 +87,5 @@ outputs:
     versioning: true
     tags: true
   audit_events:
-    - ${audit.input.event}
+  - ${audit.input.event}
   artifacts: []

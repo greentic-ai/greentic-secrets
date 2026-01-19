@@ -8,17 +8,18 @@ This repo ships a secrets-domain pack validator as a WASM component implementing
 
 ## Validator extension declaration
 
-Secrets packs declare the validator via a secrets extension entry in `gtpack.yaml`:
+Secrets packs declare the validator via a secrets extension entry in `pack.yaml`:
 
 ```yaml
 extensions:
   greentic.secrets.validators.v1:
     kind: greentic.secrets.validators.v1
     version: "1.0.0"
-    validators:
-      - id: greentic.validators.secrets
-        world: "greentic:pack-validate/pack-validator@0.1.0"
-        component_ref: ghcr.io/greentic-ai/validators/secrets:__PACK_VERSION__
+    inline:
+      validators:
+        - id: greentic.validators.secrets
+          world: "greentic:pack-validate/pack-validator@0.1.0"
+          component_ref: ghcr.io/greentic-ai/validators/secrets:__PACK_VERSION__
 ```
 
 ## Diagnostic codes

@@ -20,12 +20,11 @@ error=false
 for pack in "${PACK_DIR}"/*; do
   [[ -d "${pack}" ]] || continue
   name=$(basename "${pack}")
-  manifest="${pack}/gtpack.yaml"
+  manifest="${pack}/pack.yaml"
   meta="${pack}/metadata.json"
   cfg_schema="${pack}/schema/config.schema.json"
   sec_schema="${pack}/schema/secrets-required.schema.json"
   state_schema="${pack}/schema/state.schema.json"
-  lock_file="${pack}/pack.lock"
 
   echo "Validating pack ${name}"
 
@@ -41,10 +40,6 @@ for pack in "${PACK_DIR}"/*; do
   if [[ ! -f "${state_schema}" ]]; then
     echo "  [WARN] missing state schema (optional) ${state_schema}" >&2
   fi
-  if [[ ! -f "${lock_file}" ]]; then
-    echo "  [ERROR] missing pack.lock ${lock_file}" >&2; error=true
-  fi
-
   for flow in "${required_flows[@]}"; do
     if [[ ! -f "${pack}/flows/${flow}" ]]; then
       echo "  [ERROR] missing flow ${flow}" >&2; error=true
@@ -58,15 +53,14 @@ EXT_ID = "${PROVIDER_EXTENSION_ID}"
 p = pathlib.Path("${manifest}")
 data = yaml.safe_load(p.read_text())
 required_entrypoints = ["onboard","validate","read_secret","write_secret","rotate_secret","export_audit","breakglass"]
-missing = [e for e in required_entrypoints if e not in (data.get("entrypoints") or {})]
+flow_entrypoints = set()
+for flow in data.get("flows") or []:
+    for entry in flow.get("entrypoints") or []:
+        flow_entrypoints.add(entry)
+missing = [e for e in required_entrypoints if e not in flow_entrypoints]
 if missing:
     print(f"[ERROR] {p}: missing entrypoints {missing}")
     sys.exit(1)
-components = data.get("components") or []
-for comp in components:
-    if not comp.get("id") or not comp.get("version"):
-        print(f"[ERROR] {p}: component missing id/version: {comp}")
-        sys.exit(1)
 exts = (data.get("extensions") or {}).get(EXT_ID) or {}
 if not exts:
     print(f"[ERROR] {p}: missing extensions.{EXT_ID}")
@@ -79,16 +73,21 @@ version = exts.get("version")
 if version != "1.0.0":
     print(f"[ERROR] {p}: provider extension version must be 1.0.0")
     sys.exit(1)
-provider = exts.get("provider") or {}
-if not provider:
-    print(f"[ERROR] {p}: provider extension provider block missing")
+inline = exts.get("inline") or {}
+providers = inline.get("providers") or []
+if not providers:
+    print(f"[ERROR] {p}: provider extension inline.providers missing")
     sys.exit(1)
-runtime = provider.get("runtime") or {}
-if runtime.get("world") != "greentic:provider-schema-core/schema-core@1.0.0":
-    print(f"[ERROR] {p}: provider extension runtime.world must be greentic:provider-schema-core/schema-core@1.0.0")
+runtime = (providers[0] or {}).get("runtime") or {}
+if runtime.get("world") != "greentic:provider/schema-core@1.0.0":
+    print(f"[ERROR] {p}: provider extension runtime.world must be greentic:provider/schema-core@1.0.0")
     sys.exit(1)
 if not runtime.get("component_ref") or not runtime.get("export"):
     print(f"[ERROR] {p}: provider extension runtime must set component_ref and export")
+    sys.exit(1)
+config_ref = providers[0].get("config_schema_ref")
+if config_ref != "assets/schema/config.schema.json":
+    print(f"[ERROR] {p}: provider extension config_schema_ref must be assets/schema/config.schema.json")
     sys.exit(1)
 PY
 done

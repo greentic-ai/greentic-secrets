@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build secrets validator .gtpack bundle from ./validators/secrets.
+# Build secrets validator .gtpack bundle from ./validators/secrets using packc.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${ROOT_DIR}/dist"
@@ -30,40 +30,26 @@ rm -rf "${staging}"
 mkdir -p "${staging}"
 rsync -a "${src}/" "${staging}/"
 
-if grep -q '__PACK_VERSION__' "${staging}/gtpack.yaml"; then
-  sed -i.bak "s/__PACK_VERSION__/${VERSION}/g" "${staging}/gtpack.yaml"
-  rm -f "${staging}/gtpack.yaml.bak"
-fi
+for file in gtpack.yaml pack.yaml; do
+  if [[ -f "${staging}/${file}" ]] && grep -q '__PACK_VERSION__' "${staging}/${file}"; then
+    sed -i.bak "s/__PACK_VERSION__/${VERSION}/g" "${staging}/${file}"
+    rm -f "${staging}/${file}.bak"
+  fi
+done
 
-DIGESTS_JSON="${ROOT_DIR}/target/validators/digests.json"
-if [[ -f "${DIGESTS_JSON}" ]]; then
-  tmp="${staging}/gtpack.tmp.yaml"
-  python3 - "$DIGESTS_JSON" "$staging/gtpack.yaml" > "${tmp}" <<'PY'
-import json, sys, yaml
-digests = {d["id"]: d for d in json.load(open(sys.argv[1]))}
-manifest = yaml.safe_load(open(sys.argv[2]))
-for comp in manifest.get("components", []):
-    did = comp.get("id")
-    d = digests.get(did)
-    if d:
-        comp["uri"] = f"{d['ref']}@sha256:{d['digest']}"
-yaml.safe_dump(manifest, sys.stdout, sort_keys=False)
-PY
-  mv "${tmp}" "${staging}/gtpack.yaml"
-fi
+LOCK_FILE="${staging}/pack.lock.json"
+greentic-pack resolve --in "${staging}" --lock "${LOCK_FILE}" --offline
+greentic-pack build \
+  --in "${staging}" \
+  --lock "${LOCK_FILE}" \
+  --gtpack-out "${OUT_DIR}/validators-secrets.gtpack" \
+  --bundle none \
+  --offline \
+  --allow-oci-tags
 
-python3 - "$staging/gtpack.yaml" > "${staging}/pack.lock" <<'PY'
-import sys, yaml
-manifest = yaml.safe_load(open(sys.argv[1]))
-print("components:")
-for comp in manifest.get("components", []):
-    print(f"  - id: {comp.get('id')}")
-    print(f"    version: {comp.get('version')}")
-    print(f"    source: {comp.get('source')}")
-    uri = comp.get("uri")
-    if uri:
-        print(f"    uri: {uri}")
-PY
+greentic-pack doctor \
+  --pack "${OUT_DIR}/validators-secrets.gtpack" \
+  --offline \
+  --allow-oci-tags
 
-(cd "${OUT_DIR}" && zip -qr "validators-secrets.gtpack" "validators-secrets")
 echo "::notice::built pack validators-secrets.gtpack"

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build enterprise provider .gtpack bundles from ./packs/<provider>.
-# Supports optional airgapped embedding via PACK_AIRGAPPED=1 (expects WASM artifacts present).
+# Build enterprise provider .gtpack bundles from ./packs/<provider> using packc.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/target/provider-packs"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 DIGESTS_JSON="$ROOT_DIR/target/components/digests.json"
+VALIDATOR_PACK="$ROOT_DIR/dist/validators-secrets.gtpack"
 
 VERSION="$(python3 - <<'PY'
 import re
@@ -36,6 +36,10 @@ mkdir -p "${bundle_staging}"
 
 echo "Building provider packs for version ${VERSION}"
 
+if [[ ! -f "${VALIDATOR_PACK}" ]]; then
+  "${ROOT_DIR}/scripts/build-validator-pack.sh"
+fi
+
 for slug in "${providers[@]}"; do
   src="${ROOT_DIR}/packs/${slug}"
   if [[ ! -d "${src}" ]]; then
@@ -50,10 +54,12 @@ for slug in "${providers[@]}"; do
   rsync -a "${src}/" "${staging}/"
 
   # Inject version into manifest if placeholder present.
-  if grep -q '__PACK_VERSION__' "${staging}/gtpack.yaml"; then
-    sed -i.bak "s/__PACK_VERSION__/${VERSION}/g" "${staging}/gtpack.yaml"
-    rm -f "${staging}/gtpack.yaml.bak"
-  fi
+  for file in gtpack.yaml pack.yaml; do
+    if [[ -f "${staging}/${file}" ]] && grep -q '__PACK_VERSION__' "${staging}/${file}"; then
+      sed -i.bak "s/__PACK_VERSION__/${VERSION}/g" "${staging}/${file}"
+      rm -f "${staging}/${file}.bak"
+    fi
+  done
 
   # If digests are available, rewrite component URIs to pin them.
   if [[ -f "${DIGESTS_JSON}" ]]; then
@@ -72,58 +78,32 @@ PY
     mv "${tmp}" "${staging}/gtpack.yaml"
   fi
 
-  # Handle airgapped embedding (expected to already include wasm under components/).
-  if [[ "${PACK_AIRGAPPED:-0}" == "1" ]]; then
-    if [[ -f "${staging}/components.manifest.json" ]]; then
-      mv "${staging}/components.manifest.json" "${staging}/components/components.manifest.json"
-    fi
-  else
-    rm -rf "${staging}/components"
-  fi
+  python3 "${ROOT_DIR}/scripts/generate-flow-resolve-summary.py" "${staging}" "${DIGESTS_JSON}"
 
-  # Create pack.lock capturing component pins.
-  if [[ -f "${DIGESTS_JSON}" ]]; then
-    python3 - "$DIGESTS_JSON" "$staging/gtpack.yaml" > "${staging}/pack.lock" <<'PY'
-import json, sys, yaml
-digests = {d["id"]: d for d in json.load(open(sys.argv[1]))}
-manifest = yaml.safe_load(open(sys.argv[2]))
-print("components:")
-for comp in manifest.get("components", []):
-    did = comp.get("id")
-    d = digests.get(did, {})
-    uri = comp.get("uri", "")
-    digest = d.get("digest")
-    if digest and "@" not in uri:
-        uri = f"{uri}@sha256:{digest}"
-    print(f"  - id: {comp.get('id')}")
-    print(f"    version: {comp.get('version')}")
-    print(f"    source: {comp.get('source')}")
-    if uri:
-        print(f"    uri: {uri}")
-    if digest:
-        print(f"    digest: sha256:{digest}")
-PY
-  else
-    python3 - "$staging/gtpack.yaml" > "${staging}/pack.lock" <<'PY'
-import sys, yaml
-manifest = yaml.safe_load(open(sys.argv[1]))
-print("components:")
-for comp in manifest.get("components", []):
-    print(f"  - id: {comp.get('id')}")
-    print(f"    version: {comp.get('version')}")
-    print(f"    source: {comp.get('source')}")
-    uri = comp.get("uri")
-    if uri:
-        print(f"    uri: {uri}")
-PY
-  fi
+  LOCK_FILE="${staging}/pack.lock.json"
+  greentic-pack resolve --in "${staging}" --lock "${LOCK_FILE}" --offline
+  greentic-pack build \
+    --in "${staging}" \
+    --lock "${LOCK_FILE}" \
+    --gtpack-out "${OUT_DIR}/secrets-${slug}.gtpack" \
+    --bundle none \
+    --offline \
+    --allow-oci-tags
+  greentic-pack doctor \
+    --pack "${OUT_DIR}/secrets-${slug}.gtpack" \
+    --validator-pack "${VALIDATOR_PACK}" \
+    --offline \
+    --allow-oci-tags
 
-  (cd "${OUT_DIR}" && zip -qr "secrets-${slug}.gtpack" "secrets-${slug}")
   echo "::notice::built pack secrets-${slug}.gtpack"
   built_gtpacks+=("${OUT_DIR}/secrets-${slug}.gtpack")
 
   # Include in bundle deps.
-  echo "  - id: greentic.secrets.${slug}" >> "${bundle_staging}/deps.tmp"
+  {
+    echo "  - alias: ${slug}"
+    echo "    pack_id: greentic.secrets.${slug}"
+    echo "    version_req: \"=${VERSION}\""
+  } >> "${bundle_staging}/deps.tmp"
 done
 
 if [[ "${#built_gtpacks[@]}" -gt 0 ]]; then
@@ -132,18 +112,33 @@ fi
 
 echo "${VERSION}" > "${OUT_DIR}/VERSION"
 
-# Build bundle manifest (depends on per-provider packs)
-cat >"${bundle_staging}/gtpack.yaml" <<EOF
-schema_version: pack-v1
-id: greentic.secrets.providers
+# Build bundle pack with packc.
+cat >"${bundle_staging}/pack.yaml" <<EOF
+pack_id: greentic.secrets.providers
 version: "${VERSION}"
-name: "Greentic secrets providers bundle"
-description: "Aggregate pack that depends on all provider packs."
-kind: bundle
+kind: library
+publisher: Greentic
+components: []
 dependencies:
 $(sed 's/^/  /' "${bundle_staging}/deps.tmp")
+flows: []
+assets: []
 EOF
 rm -f "${bundle_staging}/deps.tmp"
 
-(cd "${OUT_DIR}" && zip -qr "secrets-providers.gtpack" "secrets-providers")
+LOCK_FILE="${bundle_staging}/pack.lock.json"
+greentic-pack resolve --in "${bundle_staging}" --lock "${LOCK_FILE}" --offline
+greentic-pack build \
+  --in "${bundle_staging}" \
+  --lock "${LOCK_FILE}" \
+  --gtpack-out "${OUT_DIR}/secrets-providers.gtpack" \
+  --bundle none \
+  --offline \
+  --allow-oci-tags
+greentic-pack doctor \
+  --pack "${OUT_DIR}/secrets-providers.gtpack" \
+  --validator-pack "${VALIDATOR_PACK}" \
+  --offline \
+  --allow-oci-tags
+
 echo "::notice::built bundle pack secrets-providers.gtpack"

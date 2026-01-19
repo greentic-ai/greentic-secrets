@@ -30,7 +30,7 @@ resolver = "2"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
-version = "0.4.14"
+version = "0.4.15"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -61,6 +61,7 @@ rustls = { version = "0.23", default-features = false }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_cbor = "0.11"
 serde_yaml = { package = "serde_yaml_bw", version = "2" }
 serial_test = "3"
 sha2 = "0.10"
@@ -76,7 +77,7 @@ tracing = "0.1"
 predicates = "3"
 azure_identity = { package = "azure_identity", version = "0.30" }
 azure_security_keyvault_secrets = { package = "azure_security_keyvault_secrets", version = "0.9" }
-azure_core = "0.30"
+azure_core = "0.30.1"
 google-cloud-secretmanager-v1 = "1"
 k8s-openapi = { version = "0.26.1", default-features = false, features = ["v1_31"] }
 kube = { version = "2.0", default-features = false, features = ["client", "runtime", "derive", "rustls-tls"] }
@@ -86,7 +87,7 @@ secrets-provider-inmemory = { version = "0.1", path = "components/secrets-provid
 greentic-types = { version = "0.4", features = ["telemetry-autoinit"] }
 url = "2"
 uuid = "1"
-wit-bindgen = "0.50"
+wit-bindgen = "0.51"
 greentic_secrets_api = { package = "greentic-secrets-api", version = "0.4", path = "greentic-secrets-api" }
 greentic_secrets_spec = { package = "greentic-secrets-spec", version = "0.4", path = "greentic-secrets-spec" }
 greentic_secrets_core = { package = "greentic-secrets-core", version = "0.4", path = "greentic-secrets-core" }

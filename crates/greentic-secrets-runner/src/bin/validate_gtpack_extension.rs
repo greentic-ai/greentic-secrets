@@ -3,7 +3,8 @@ use std::fs::File;
 use std::io::{Read, Seek};
 use std::path::Path;
 
-use greentic_types::{PROVIDER_EXTENSION_ID, PackManifest, decode_pack_manifest};
+use greentic_types::PROVIDER_EXTENSION_ID;
+use serde_json::Value as JsonValue;
 use serde_yaml::Value;
 use zip::ZipArchive;
 
@@ -33,9 +34,9 @@ fn validate_pack(pack: &str) -> Result<(), String> {
     let mut archive =
         ZipArchive::new(file).map_err(|err| format!("[ERROR] {}: open zip: {err}", pack))?;
     if let Some(bytes) = read_member_bytes(&mut archive, "manifest.cbor") {
-        let manifest = decode_pack_manifest(&bytes)
+        let doc: JsonValue = serde_cbor::from_slice(&bytes)
             .map_err(|err| format!("[ERROR] {}: decode manifest.cbor: {err}", pack))?;
-        validate_manifest(pack, &manifest)?;
+        validate_manifest(pack, &doc)?;
     } else if let Some(bytes) = read_member_bytes(&mut archive, "gtpack.yaml") {
         eprintln!(
             "[WARN] {}: manifest.cbor missing; falling back to gtpack.yaml validation",
@@ -72,10 +73,9 @@ fn read_member_bytes<R: Read + Seek>(
     None
 }
 
-fn validate_manifest(pack: &str, manifest: &PackManifest) -> Result<(), String> {
+fn validate_manifest(pack: &str, manifest: &JsonValue) -> Result<(), String> {
     let extensions = manifest
-        .extensions
-        .as_ref()
+        .get("extensions")
         .ok_or_else(|| format!("[ERROR] {}: missing extensions map", pack))?;
     let provider = extensions.get(PROVIDER_EXTENSION_ID).ok_or_else(|| {
         format!(
@@ -83,16 +83,24 @@ fn validate_manifest(pack: &str, manifest: &PackManifest) -> Result<(), String> 
             pack, PROVIDER_EXTENSION_ID
         )
     })?;
-    if provider.kind != PROVIDER_EXTENSION_ID {
+    let kind = provider
+        .get("kind")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    if kind != PROVIDER_EXTENSION_ID {
         return Err(format!(
             "[ERROR] {}: provider extension kind {} != {}",
-            pack, provider.kind, PROVIDER_EXTENSION_ID
+            pack, kind, PROVIDER_EXTENSION_ID
         ));
     }
-    if provider.version != "1.0.0" {
+    let version = provider
+        .get("version")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    if version != "1.0.0" {
         return Err(format!(
             "[ERROR] {}: provider extension version {} != 1.0.0",
-            pack, provider.version
+            pack, version
         ));
     }
     Ok(())

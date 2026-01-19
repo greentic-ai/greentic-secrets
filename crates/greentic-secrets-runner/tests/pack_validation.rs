@@ -4,7 +4,8 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 
-use greentic_types::{PROVIDER_EXTENSION_ID, decode_pack_manifest};
+use greentic_types::PROVIDER_EXTENSION_ID;
+use serde_json::Value as JsonValue;
 use serde_yaml::Value;
 use zip::ZipArchive;
 
@@ -20,11 +21,11 @@ fn provider_packs_have_provider_core_extension_and_schemas() {
     let packs = ["aws-sm", "azure-kv", "gcp-sm", "k8s", "vault-kv"];
     for pack in packs {
         let pack_dir = packs_root().join(pack);
-        let gtpack_path = pack_dir.join("gtpack.yaml");
-        let raw = fs::read_to_string(&gtpack_path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", gtpack_path.display()));
+        let pack_yaml = pack_dir.join("pack.yaml");
+        let raw = fs::read_to_string(&pack_yaml)
+            .unwrap_or_else(|e| panic!("read {}: {e}", pack_yaml.display()));
         let doc: Value = serde_yaml::from_str(&raw)
-            .unwrap_or_else(|e| panic!("parse {}: {e}", gtpack_path.display()));
+            .unwrap_or_else(|e| panic!("parse {}: {e}", pack_yaml.display()));
 
         let extensions = doc
             .get("extensions")
@@ -33,59 +34,71 @@ fn provider_packs_have_provider_core_extension_and_schemas() {
                 panic!(
                     "missing {} in {}",
                     PROVIDER_EXTENSION_ID,
-                    gtpack_path.display()
+                    pack_yaml.display()
                 )
             });
         let kind = extensions
             .get("kind")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("missing kind in {}", gtpack_path.display()));
+            .unwrap_or_else(|| panic!("missing kind in {}", pack_yaml.display()));
         assert_eq!(
             kind,
             PROVIDER_EXTENSION_ID,
             "provider extension kind mismatch in {}",
-            gtpack_path.display()
+            pack_yaml.display()
         );
         let version = extensions
             .get("version")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("missing extension version in {}", gtpack_path.display()));
+            .unwrap_or_else(|| panic!("missing extension version in {}", pack_yaml.display()));
         assert_eq!(
             version,
             "1.0.0",
             "provider extension version must be 1.0.0 in {}",
-            gtpack_path.display()
+            pack_yaml.display()
         );
-        let runtime = extensions
-            .get("provider")
-            .and_then(|v| v.get("runtime"))
-            .unwrap_or_else(|| panic!("missing runtime in {}", gtpack_path.display()));
+        let provider = extensions
+            .get("inline")
+            .and_then(|v| v.get("providers"))
+            .and_then(|v| v.get(0))
+            .unwrap_or_else(|| panic!("missing inline.providers in {}", pack_yaml.display()));
+        let runtime = provider
+            .get("runtime")
+            .unwrap_or_else(|| panic!("missing runtime in {}", pack_yaml.display()));
+        let config_schema = provider
+            .get("config_schema_ref")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert_eq!(
+            config_schema,
+            "assets/schema/config.schema.json",
+            "provider config schema ref mismatch in {}",
+            pack_yaml.display()
+        );
         let world = runtime
             .get("world")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("missing runtime.world in {}", gtpack_path.display()));
+            .unwrap_or_else(|| panic!("missing runtime.world in {}", pack_yaml.display()));
         assert_eq!(
             world,
-            "greentic:provider-schema-core/schema-core@1.0.0",
+            "greentic:provider/schema-core@1.0.0",
             "provider-core world mismatch in {}",
-            gtpack_path.display()
+            pack_yaml.display()
         );
         let export = runtime
             .get("export")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("missing runtime.export in {}", gtpack_path.display()));
+            .unwrap_or_else(|| panic!("missing runtime.export in {}", pack_yaml.display()));
         assert_eq!(
             export,
             "invoke",
             "export must be invoke in {}",
-            gtpack_path.display()
+            pack_yaml.display()
         );
         runtime
             .get("component_ref")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| {
-                panic!("missing runtime.component_ref in {}", gtpack_path.display())
-            });
+            .unwrap_or_else(|| panic!("missing runtime.component_ref in {}", pack_yaml.display()));
 
         for rel in [
             "schema/config.schema.json",
@@ -144,69 +157,40 @@ fn built_provider_gtpacks_embed_canonical_provider_extension() {
     );
 
     for pack in packs {
-        let manifest_bytes = read_pack_member(&pack, "manifest.cbor");
-        if let Some(bytes) = manifest_bytes {
-            let manifest = decode_pack_manifest(&bytes)
-                .unwrap_or_else(|err| panic!("decode manifest from {}: {err}", pack.display()));
-            let extensions = manifest
-                .extensions
-                .as_ref()
-                .unwrap_or_else(|| panic!("{} missing extensions", pack.display()));
-            let provider = extensions.get(PROVIDER_EXTENSION_ID).unwrap_or_else(|| {
-                panic!(
-                    "{} missing provider extension {}",
-                    pack.display(),
-                    PROVIDER_EXTENSION_ID
-                )
-            });
-            assert_eq!(
-                provider.kind,
-                PROVIDER_EXTENSION_ID,
-                "provider extension kind mismatch in {}",
-                pack.display()
-            );
-            assert_eq!(
-                provider.version,
-                "1.0.0",
-                "provider extension version mismatch in {}",
-                pack.display()
-            );
-        } else {
-            let yaml_bytes = read_pack_member(&pack, "gtpack.yaml")
-                .unwrap_or_else(|| panic!("{} missing gtpack.yaml", pack.display()));
-            let doc: Value = serde_yaml::from_slice(&yaml_bytes)
-                .unwrap_or_else(|err| panic!("parse gtpack.yaml from {}: {err}", pack.display()));
-            let extensions = doc
-                .get("extensions")
-                .and_then(|v| v.get(PROVIDER_EXTENSION_ID))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{} missing extensions.{}",
-                        pack.display(),
-                        PROVIDER_EXTENSION_ID
-                    )
-                });
-            let kind = extensions
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("missing kind in {}", pack.display()));
-            assert_eq!(
-                kind,
-                PROVIDER_EXTENSION_ID,
-                "provider extension kind mismatch in {}",
-                pack.display()
-            );
-            let version = extensions
-                .get("version")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("missing version in {}", pack.display()));
-            assert_eq!(
-                version,
-                "1.0.0",
-                "provider extension version mismatch in {}",
-                pack.display()
-            );
-        }
+        let manifest_bytes = read_pack_member(&pack, "manifest.cbor")
+            .unwrap_or_else(|| panic!("{} missing manifest.cbor", pack.display()));
+        let doc: JsonValue = serde_cbor::from_slice(&manifest_bytes)
+            .unwrap_or_else(|err| panic!("decode manifest from {}: {err}", pack.display()));
+        let extensions = doc
+            .get("extensions")
+            .unwrap_or_else(|| panic!("{} missing extensions", pack.display()));
+        let provider = extensions.get(PROVIDER_EXTENSION_ID).unwrap_or_else(|| {
+            panic!(
+                "{} missing provider extension {}",
+                pack.display(),
+                PROVIDER_EXTENSION_ID
+            )
+        });
+        let kind = provider
+            .get("kind")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default();
+        assert_eq!(
+            kind,
+            PROVIDER_EXTENSION_ID,
+            "provider extension kind mismatch in {}",
+            pack.display()
+        );
+        let version = provider
+            .get("version")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default();
+        assert_eq!(
+            version,
+            "1.0.0",
+            "provider extension version mismatch in {}",
+            pack.display()
+        );
     }
 }
 

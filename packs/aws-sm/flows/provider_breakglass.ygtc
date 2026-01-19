@@ -1,55 +1,52 @@
-schema_version: flow-v1
+schema_version: 1
 id: provider_breakglass
-kind: event
+type: event
 entrypoints:
   default: {}
 nodes:
   validate_config:
-    component:
-      id: greentic.secrets.policy_validator
-      operation: validate_config
-    input:
+    telemetry:
+      span: provider.breakglass.config
+    operation: validate_config
+    component.exec:
       config: ${inputs.config}
-      schema_ref: schema/config.schema.json
-    telemetry: { span: provider.breakglass.config }
-
+      schema_ref: assets/schema/config.schema.json
+      component: greentic.secrets.policy_validator
   authorize:
     after: validate_config
-    component:
-      id: greentic.secrets.policy_validator
-      operation: authorize_breakglass
-    input:
+    telemetry:
+      span: provider.breakglass.authorize
+    operation: authorize_breakglass
+    component.exec:
       actor: ${inputs.actor}
       justification: ${inputs.justification}
       ticket: ${inputs.ticket}
       duration_ms: ${inputs.duration_ms}
-    telemetry: { span: provider.breakglass.authorize }
-
+      component: greentic.secrets.policy_validator
   read_once:
     after: authorize
-    component:
-      id: greentic.secrets.provider.aws_sm
-      operation: get_secret_value
-    input:
-      config: ${inputs.config}
-      secret_ref: ${inputs.secret_ref}
-      purpose: "breakglass"
     telemetry:
       span: provider.breakglass.read
       attributes:
         secret_ref: ${inputs.secret_ref}
-    redaction:
-      fields: ["value"]
     output:
       value: ${data.value}
       version: ${data.version}
-
+    redaction:
+      fields:
+      - value
+    operation: get_secret_value
+    component.exec:
+      config: ${inputs.config}
+      secret_ref: ${inputs.secret_ref}
+      purpose: breakglass
+      component: greentic.secrets.provider.aws_sm
   audit:
     after: read_once
-    component:
-      id: greentic.secrets.audit_exporter
-      operation: emit_event
-    input:
+    telemetry:
+      span: provider.breakglass.audit
+    operation: emit_event
+    component.exec:
       sink: ${inputs.config.audit}
       event:
         kind: BREAKGLASS_GRANTED
@@ -60,8 +57,7 @@ nodes:
         justification: ${inputs.justification}
         ticket: ${inputs.ticket}
         correlation_id: ${inputs.correlation_id}
-    telemetry: { span: provider.breakglass.audit }
-
+      component: greentic.secrets.audit_exporter
 outputs:
   status: OK
   provider:
@@ -74,5 +70,5 @@ outputs:
   secret_version: ${read_once.output.version}
   value: ${read_once.output.value}
   audit_events:
-    - ${audit.input.event}
+  - ${audit.input.event}
   artifacts: []
