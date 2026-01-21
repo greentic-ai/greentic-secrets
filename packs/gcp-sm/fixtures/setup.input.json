@@ -1,0 +1,31 @@
+{
+  "config": {
+    "tenant_id": "placeholder",
+    "environment": "dev",
+    "project_id": "placeholder",
+    "auth_mode": "workload_identity",
+    "namespace_prefix": "placeholder",
+    "audit": {
+      "sink_type": "splunk",
+      "sink_config_ref": "placeholder"
+    },
+    "timeouts": {
+      "connect_ms": 1,
+      "op_ms": 1
+    },
+    "retry_policy": {
+      "max_attempts": 1,
+      "base_backoff_ms": 1,
+      "max_backoff_ms": 1,
+      "jitter": true
+    },
+    "redaction_policy": {
+      "redact_values": true,
+      "log_secret_refs_only": true
+    }
+  },
+  "secrets": {
+    "gcp_service_account_json": "fake_gcp_service_account_json",
+    "audit_sink_credentials": "fake_audit_sink_credentials"
+  }
+}

@@ -30,8 +30,8 @@ components:
     source: oci
     uri: ghcr.io/greentic-ai/components/greentic.secrets.policy_validator:__PACK_VERSION__
 schemas:
-  config: schema/config.schema.json
-  secrets: schema/secrets-required.schema.json
+  config: schemas/secrets/k8s/config.schema.json
+  secrets: schemas/secrets/k8s/secret.schema.json
 metadata: metadata.json
 extensions:
   greentic.provider-extension.v1:

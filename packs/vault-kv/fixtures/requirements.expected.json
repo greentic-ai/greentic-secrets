@@ -1,0 +1,57 @@
+{
+  "provider_id": "greentic.secrets.vault-kv",
+  "config": {
+    "required": [
+      "tenant_id",
+      "environment",
+      "vault_addr",
+      "mount_path",
+      "auth_mode",
+      "namespace_prefix",
+      "audit",
+      "timeouts",
+      "retry_policy",
+      "redaction_policy"
+    ],
+    "optional": [
+      "labels"
+    ],
+    "constraints": {
+      "enum": {
+        "environment": [
+          "dev",
+          "stage",
+          "prod"
+        ],
+        "auth_mode": [
+          "token",
+          "approle",
+          "kubernetes"
+        ]
+      }
+    }
+  },
+  "secrets": {
+    "required": [
+      "audit_sink_credentials"
+    ],
+    "optional": [
+      "vault_token",
+      "vault_role_id",
+      "vault_secret_id",
+      "k8s_jwt",
+      "k8s_role"
+    ],
+    "constraints": {}
+  },
+  "capabilities": {
+    "supports_read": true,
+    "supports_write": true,
+    "supports_delete": true
+  },
+  "setup_needs": {
+    "public_base_url": false,
+    "oauth": false,
+    "subscriptions": false
+  }
+}

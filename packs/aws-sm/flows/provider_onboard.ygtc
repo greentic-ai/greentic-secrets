@@ -10,7 +10,7 @@ nodes:
     operation: validate_config
     component.exec:
       config: ${inputs.config}
-      schema_ref: assets/schema/config.schema.json
+      schema_ref: assets/schemas/secrets/aws-sm/config.schema.json
       component: greentic.secrets.policy_validator
   auth:
     after: validate_config

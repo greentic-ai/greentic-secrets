@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Fixture Provider Config",
+  "type": "object",
+  "properties": {
+    "environment": { "type": "string", "enum": ["dev", "stage"] },
+    "region": { "type": "string" },
+    "audit": {
+      "type": "object",
+      "properties": {
+        "sink_type": { "type": "string", "enum": ["splunk", "http"] },
+        "sink_config_ref": { "type": "string" }
+      },
+      "required": ["sink_type", "sink_config_ref"]
+    }
+  },
+  "required": ["environment", "region", "audit"],
+  "additionalProperties": false
+}

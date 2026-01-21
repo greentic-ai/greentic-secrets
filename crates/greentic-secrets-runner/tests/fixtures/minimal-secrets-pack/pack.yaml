@@ -1,0 +1,41 @@
+pack_id: greentic.secrets.fixture-minimal
+version: 0.1.0
+kind: provider
+publisher: Greentic
+components: []
+dependencies: []
+flows:
+- id: provider_read_secret
+  file: flows/provider_read_secret.ygtc
+  tags: []
+  entrypoints:
+  - read_secret
+assets:
+- path: secret-requirements.json
+- path: schemas/secrets/fixture-minimal/config.schema.json
+- path: schemas/secrets/fixture-minimal/secret.schema.json
+- path: schemas/secrets/fixture-minimal/state.schema.json
+extensions:
+  greentic.provider-extension.v1:
+    kind: greentic.provider-extension.v1
+    version: 1.0.0
+    inline:
+      providers:
+      - provider_type: greentic.secrets.fixture-minimal
+        config_schema_ref: assets/schemas/secrets/fixture-minimal/config.schema.json
+        runtime:
+          world: greentic:provider/schema-core@1.0.0
+          component_ref: ghcr.io/greentic-ai/components/greentic.secrets.provider.fixture_minimal:0.1.0
+          export: invoke
+        capabilities:
+        - secrets
+        ops:
+        - read_secret
+  greentic.secrets.validators.v1:
+    kind: greentic.secrets.validators.v1
+    version: 1.0.0
+    inline:
+      validators:
+      - id: greentic.validators.secrets
+        world: greentic:pack-validate/pack-validator@0.1.0
+        component_ref: ghcr.io/greentic-ai/validators/secrets:0.1.0

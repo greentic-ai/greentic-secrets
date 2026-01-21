@@ -4,7 +4,7 @@ set -euo pipefail
 # Build enterprise provider .gtpack bundles from ./packs/<provider> using packc.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_DIR="$ROOT_DIR/target/provider-packs"
+OUT_DIR="${OUT_DIR:-$ROOT_DIR/dist/packs}"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 DIGESTS_JSON="$ROOT_DIR/target/components/digests.json"
@@ -90,6 +90,7 @@ PY
     --offline \
     --allow-oci-tags
   greentic-pack doctor \
+    --validate \
     --pack "${OUT_DIR}/secrets-${slug}.gtpack" \
     --validator-pack "${VALIDATOR_PACK}" \
     --offline \
@@ -136,6 +137,7 @@ greentic-pack build \
   --offline \
   --allow-oci-tags
 greentic-pack doctor \
+  --validate \
   --pack "${OUT_DIR}/secrets-providers.gtpack" \
   --validator-pack "${VALIDATOR_PACK}" \
   --offline \

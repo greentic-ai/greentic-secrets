@@ -356,7 +356,7 @@ mod tests {
             provider_type: "demo".to_owned(),
             capabilities: Vec::new(),
             ops: Vec::new(),
-            config_schema_ref: "schema/secrets-required.schema.json".to_owned(),
+            config_schema_ref: "assets/schemas/secrets/demo/config.schema.json".to_owned(),
             state_schema_ref: None,
             runtime: ProviderRuntimeRef {
                 component_ref: "component".to_owned(),

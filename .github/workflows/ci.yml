@@ -53,3 +53,19 @@ jobs:
         run: |
           echo "local provider '${{ matrix.provider }}' failed" >&2
           exit 1
+
+  secrets-pack-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - name: Install greentic-pack + greentic-provision
+        run: |
+          cargo install greentic-pack --version 0.4.16
+          cargo install greentic-provision --version 0.4.16
+      - name: Build provider packs
+        run: ./scripts/build-provider-packs.sh
+      - name: Validate provisioning fixtures
+        run: ./scripts/validate-provision-fixtures.sh
+      - name: Run secrets pack conformance (dry-run)
+        run: cargo run -p greentic-secrets-test -- e2e --packs dist/packs --timeout-secs 20

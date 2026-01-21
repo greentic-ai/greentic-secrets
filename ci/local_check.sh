@@ -212,6 +212,47 @@ if run_or_skip "cargo test --workspace --all-features --locked" ensure_tools car
   run_tests
 fi
 
+run_pack_doctor() {
+  step "greentic-pack doctor --validate (secrets provider packs)"
+  local out_dir="${REPO_ROOT}/dist/packs"
+  OUT_DIR="${out_dir}" "${REPO_ROOT}/scripts/build-provider-packs.sh"
+  for pack in "${out_dir}"/secrets-*.gtpack; do
+    greentic-pack doctor \
+      --validate \
+      --pack "${pack}" \
+      --validator-pack "${REPO_ROOT}/dist/validators-secrets.gtpack" \
+      --offline \
+      --allow-oci-tags
+  done
+}
+
+if run_or_skip "greentic-pack doctor --validate secrets packs (requires greentic-pack)" \
+  ensure_tools greentic-pack; then
+  run_pack_doctor
+fi
+
+run_secrets_e2e() {
+  step "greentic-secrets-test e2e (dry-run)"
+  local out_dir="${REPO_ROOT}/dist/packs"
+  OUT_DIR="${out_dir}" "${REPO_ROOT}/scripts/build-provider-packs.sh"
+  cargo run -p greentic-secrets-test -- e2e --packs "${out_dir}"
+}
+
+if run_or_skip "greentic-secrets-test e2e (requires greentic-provision)" \
+  ensure_tools cargo greentic-provision; then
+  run_secrets_e2e
+fi
+
+run_provision_fixtures() {
+  step "greentic-provision dry-run fixtures (secrets packs)"
+  "${REPO_ROOT}/scripts/validate-provision-fixtures.sh"
+}
+
+if run_or_skip "greentic-provision dry-run fixtures (requires greentic-provision)" \
+  ensure_tools greentic-provision; then
+  run_provision_fixtures
+fi
+
 package_publishable_crates() {
   step "cargo package (dry-run) for publishable crates"
   local pkg_list=""

@@ -1,0 +1,22 @@
+{
+  "id": "greentic.secrets.gcp-sm",
+  "version": "__PACK_VERSION__",
+  "meta": {
+    "entry_flows": {
+      "setup": "setup_default",
+      "requirements": "requirements"
+    },
+    "requires_public_base_url": false,
+    "capabilities": []
+  },
+  "flows": [
+    {
+      "entry": "setup",
+      "id": "setup_default"
+    },
+    {
+      "entry": "requirements",
+      "id": "requirements"
+    }
+  ]
+}

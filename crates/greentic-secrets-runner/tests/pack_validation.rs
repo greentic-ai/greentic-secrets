@@ -1,10 +1,11 @@
 use std::fs;
 use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use greentic_types::PROVIDER_EXTENSION_ID;
+use serde_cbor::Value as CborValue;
 use serde_json::Value as JsonValue;
 use serde_yaml::Value;
 use zip::ZipArchive;
@@ -69,9 +70,10 @@ fn provider_packs_have_provider_core_extension_and_schemas() {
             .get("config_schema_ref")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let expected_config_schema = format!("assets/schemas/secrets/{pack}/config.schema.json");
         assert_eq!(
             config_schema,
-            "assets/schema/config.schema.json",
+            expected_config_schema,
             "provider config schema ref mismatch in {}",
             pack_yaml.display()
         );
@@ -101,12 +103,19 @@ fn provider_packs_have_provider_core_extension_and_schemas() {
             .unwrap_or_else(|| panic!("missing runtime.component_ref in {}", pack_yaml.display()));
 
         for rel in [
-            "schema/config.schema.json",
-            "schema/secrets-required.schema.json",
+            format!("schemas/secrets/{pack}/config.schema.json"),
+            format!("schemas/secrets/{pack}/secret.schema.json"),
         ] {
             let path = pack_dir.join(rel);
             assert!(path.exists(), "missing required schema {}", path.display());
         }
+
+        let req_path = pack_dir.join("secret-requirements.json");
+        assert!(
+            req_path.exists(),
+            "missing secret requirements {}",
+            req_path.display()
+        );
     }
 }
 
@@ -131,7 +140,7 @@ fn built_provider_gtpacks_embed_canonical_provider_extension() {
         status.code()
     );
 
-    let out_dir = repo_root.join("target").join("provider-packs");
+    let out_dir = repo_root.join("dist").join("packs");
     let mut packs = Vec::new();
     for entry in
         fs::read_dir(&out_dir).unwrap_or_else(|err| panic!("read_dir {}: {err}", out_dir.display()))
@@ -191,7 +200,131 @@ fn built_provider_gtpacks_embed_canonical_provider_extension() {
             "provider extension version mismatch in {}",
             pack.display()
         );
+
+        let entries = list_pack_entries(&pack);
+        let slug = pack
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| stem.strip_prefix("secrets-"))
+            .unwrap_or_default();
+        let required_assets = [
+            "assets/secret-requirements.json".to_owned(),
+            format!("assets/schemas/secrets/{slug}/config.schema.json"),
+            format!("assets/schemas/secrets/{slug}/secret.schema.json"),
+        ];
+        for asset in required_assets.iter() {
+            assert!(
+                entries.contains(asset),
+                "{} missing required asset {}",
+                pack.display(),
+                asset
+            );
+        }
+
+        let sbom_bytes = read_pack_member(&pack, "sbom.cbor")
+            .unwrap_or_else(|| panic!("{} missing sbom.cbor", pack.display()));
+        let sbom: CborValue = serde_cbor::from_slice(&sbom_bytes)
+            .unwrap_or_else(|err| panic!("decode sbom from {}: {err}", pack.display()));
+        let sbom_strings = collect_cbor_strings(&sbom);
+
+        for asset in required_assets.iter() {
+            assert!(
+                sbom_strings.contains(asset),
+                "{} missing {} in SBOM",
+                pack.display(),
+                asset
+            );
+        }
+
+        let entry_set: std::collections::HashSet<_> = entries.iter().cloned().collect();
+        for value in sbom_strings.iter() {
+            if is_pack_path(value) {
+                assert!(
+                    entry_set.contains(value),
+                    "{} SBOM references missing entry {}",
+                    pack.display(),
+                    value
+                );
+            }
+        }
     }
+}
+
+#[test]
+fn minimal_fixture_pack_validates() {
+    let packs = packs_root();
+    let repo_root = packs
+        .parent()
+        .unwrap_or_else(|| panic!("packs directory missing parent for {}", packs.display()));
+    let fixture_src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("minimal-secrets-pack");
+    let staging_root = repo_root.join("target").join("fixture-packs");
+    let staging = staging_root.join("minimal-secrets-pack");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).expect("remove staging");
+    }
+    fs::create_dir_all(&staging_root).expect("create staging root");
+    copy_dir_all(&fixture_src, &staging).expect("copy fixture");
+
+    let lock_file = staging.join("pack.lock.json");
+    let status = Command::new("greentic-pack")
+        .args([
+            "resolve",
+            "--in",
+            staging.to_str().expect("staging"),
+            "--lock",
+            lock_file.to_str().expect("lock"),
+            "--offline",
+        ])
+        .status()
+        .expect("run greentic-pack resolve");
+    assert!(status.success(), "greentic-pack resolve failed");
+
+    let pack_out = staging_root.join("minimal-secrets-pack.gtpack");
+    let status = Command::new("greentic-pack")
+        .args([
+            "build",
+            "--in",
+            staging.to_str().expect("staging"),
+            "--lock",
+            lock_file.to_str().expect("lock"),
+            "--gtpack-out",
+            pack_out.to_str().expect("pack_out"),
+            "--bundle",
+            "none",
+            "--offline",
+            "--allow-oci-tags",
+        ])
+        .status()
+        .expect("run greentic-pack build");
+    assert!(status.success(), "greentic-pack build failed");
+
+    let validator_pack = repo_root.join("dist").join("validators-secrets.gtpack");
+    if !validator_pack.exists() {
+        let status = Command::new("bash")
+            .arg("scripts/build-validator-pack.sh")
+            .current_dir(repo_root)
+            .status()
+            .expect("build validator pack");
+        assert!(status.success(), "build-validator-pack.sh failed");
+    }
+
+    let status = Command::new("greentic-pack")
+        .args([
+            "doctor",
+            "--validate",
+            "--pack",
+            pack_out.to_str().expect("pack_out"),
+            "--validator-pack",
+            validator_pack.to_str().expect("validator_pack"),
+            "--offline",
+            "--allow-oci-tags",
+        ])
+        .status()
+        .expect("run greentic-pack doctor");
+    assert!(status.success(), "greentic-pack doctor failed");
 }
 
 fn read_pack_member(pack: &PathBuf, name_suffix: &str) -> Option<Vec<u8>> {
@@ -210,4 +343,64 @@ fn read_pack_member(pack: &PathBuf, name_suffix: &str) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+fn list_pack_entries(pack: &PathBuf) -> Vec<String> {
+    let file = File::open(pack).expect("open pack");
+    let mut archive = ZipArchive::new(file).expect("open pack archive");
+    let mut entries = Vec::new();
+    for idx in 0..archive.len() {
+        let entry = archive.by_index(idx).expect("archive entry");
+        if entry.is_dir() {
+            continue;
+        }
+        entries.push(entry.name().to_string());
+    }
+    entries
+}
+
+fn collect_cbor_strings(value: &CborValue) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_cbor_strings_inner(value, &mut out);
+    out
+}
+
+fn collect_cbor_strings_inner(value: &CborValue, out: &mut Vec<String>) {
+    match value {
+        CborValue::Text(text) => out.push(text.to_string()),
+        CborValue::Array(items) => {
+            for item in items {
+                collect_cbor_strings_inner(item, out);
+            }
+        }
+        CborValue::Map(entries) => {
+            for (key, value) in entries {
+                collect_cbor_strings_inner(key, out);
+                collect_cbor_strings_inner(value, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_pack_path(value: &str) -> bool {
+    value.starts_with("assets/")
+        || value.starts_with("flows/")
+        || value.starts_with("schemas/")
+        || value.ends_with(".cbor")
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_all(&path, &target)?;
+        } else {
+            fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
 }

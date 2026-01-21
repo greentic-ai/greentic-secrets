@@ -42,9 +42,21 @@ flows:
   - breakglass
 assets:
 - path: metadata.json
-- path: schema/config.schema.json
-- path: schema/secrets-required.schema.json
-- path: schema/state.schema.json
+- path: secret-requirements.json
+- path: pack.json
+- path: wasm/setup_default__requirements.wat
+- path: wasm/setup_default__collect.wat
+- path: wasm/setup_default__validate.wat
+- path: wasm/setup_default__apply.wat
+- path: wasm/setup_default__summary.wat
+- path: wasm/setup_default__requirements.wat
+- path: schemas/secrets/azure-kv/config.schema.json
+- path: schemas/secrets/azure-kv/secret.schema.json
+- path: schemas/secrets/azure-kv/state.schema.json
+- path: iac/tofu/main.tf
+- path: iac/tofu/variables.tf
+- path: iac/tofu/outputs.tf
+- path: iac/tofu/README.md
 extensions:
   greentic.provider-extension.v1:
     kind: greentic.provider-extension.v1
@@ -52,7 +64,7 @@ extensions:
     inline:
       providers:
       - provider_type: greentic.secrets.azure-kv
-        config_schema_ref: assets/schema/config.schema.json
+        config_schema_ref: assets/schemas/secrets/azure-kv/config.schema.json
         runtime:
           world: greentic:provider/schema-core@1.0.0
           component_ref: ghcr.io/greentic-ai/components/greentic.secrets.provider.azure_kv:__PACK_VERSION__

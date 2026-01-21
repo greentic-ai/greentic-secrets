@@ -1,0 +1,16 @@
+{
+  "id": "greentic.secrets.fixture",
+  "version": "0.0.1",
+  "meta": {
+    "entry_flows": {
+      "setup": "setup_default",
+      "requirements": "requirements"
+    },
+    "requires_public_base_url": false,
+    "capabilities": []
+  },
+  "flows": [
+    { "entry": "setup", "id": "setup_default" },
+    { "entry": "requirements", "id": "requirements" }
+  ]
+}

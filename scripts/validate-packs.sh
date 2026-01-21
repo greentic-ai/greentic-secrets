@@ -22,9 +22,16 @@ for pack in "${PACK_DIR}"/*; do
   name=$(basename "${pack}")
   manifest="${pack}/pack.yaml"
   meta="${pack}/metadata.json"
-  cfg_schema="${pack}/schema/config.schema.json"
-  sec_schema="${pack}/schema/secrets-required.schema.json"
-  state_schema="${pack}/schema/state.schema.json"
+  pack_json="${pack}/pack.json"
+  cfg_schema="${pack}/schemas/secrets/${name}/config.schema.json"
+  sec_schema="${pack}/schemas/secrets/${name}/secret.schema.json"
+  state_schema="${pack}/schemas/secrets/${name}/state.schema.json"
+  reqs_file="${pack}/secret-requirements.json"
+  wasm_requirements="${pack}/wasm/setup_default__requirements.wat"
+  wasm_collect="${pack}/wasm/setup_default__collect.wat"
+  wasm_validate="${pack}/wasm/setup_default__validate.wat"
+  wasm_apply="${pack}/wasm/setup_default__apply.wat"
+  wasm_summary="${pack}/wasm/setup_default__summary.wat"
 
   echo "Validating pack ${name}"
 
@@ -34,11 +41,20 @@ for pack in "${PACK_DIR}"/*; do
   if [[ ! -f "${meta}" ]]; then
     echo "  [ERROR] missing metadata ${meta}" >&2; error=true
   fi
+  if [[ ! -f "${pack_json}" ]]; then
+    echo "  [ERROR] missing pack.json ${pack_json}" >&2; error=true
+  fi
+  if [[ ! -f "${reqs_file}" ]]; then
+    echo "  [ERROR] missing secret requirements ${reqs_file}" >&2; error=true
+  fi
   if [[ ! -f "${cfg_schema}" || ! -f "${sec_schema}" ]]; then
-    echo "  [ERROR] missing schema files in ${pack}/schema" >&2; error=true
+    echo "  [ERROR] missing schema files in ${pack}/schemas/secrets/${name}" >&2; error=true
   fi
   if [[ ! -f "${state_schema}" ]]; then
     echo "  [WARN] missing state schema (optional) ${state_schema}" >&2
+  fi
+  if [[ ! -f "${wasm_requirements}" || ! -f "${wasm_collect}" || ! -f "${wasm_validate}" || ! -f "${wasm_apply}" || ! -f "${wasm_summary}" ]]; then
+    echo "  [ERROR] missing provisioning wasm in ${pack}/wasm" >&2; error=true
   fi
   for flow in "${required_flows[@]}"; do
     if [[ ! -f "${pack}/flows/${flow}" ]]; then
@@ -86,8 +102,9 @@ if not runtime.get("component_ref") or not runtime.get("export"):
     print(f"[ERROR] {p}: provider extension runtime must set component_ref and export")
     sys.exit(1)
 config_ref = providers[0].get("config_schema_ref")
-if config_ref != "assets/schema/config.schema.json":
-    print(f"[ERROR] {p}: provider extension config_schema_ref must be assets/schema/config.schema.json")
+expected_ref = f"assets/schemas/secrets/{p.parent.name}/config.schema.json"
+if config_ref != expected_ref:
+    print(f"[ERROR] {p}: provider extension config_schema_ref must be {expected_ref}")
     sys.exit(1)
 PY
 done

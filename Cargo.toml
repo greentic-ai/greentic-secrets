@@ -13,6 +13,7 @@ members = [
     "greentic-secrets-lib",
     "conformance",
     "crates/greentic-secrets-runner",
+    "crates/greentic-secrets-test",
     "crates/secrets-provider-tests",
     "providers/greentic-dev",
     "providers/greentic-aws-sm",
@@ -30,12 +31,12 @@ resolver = "2"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
-version = "0.4.15"
+version = "0.4.17"
 
 [workspace.dependencies]
 anyhow = "1"
 assert_cmd = "2"
-async-nats = "0.45"
+async-nats = "0.46"
 async-trait = "0.1"
 axum = "0.8"
 aws-config = "1"
@@ -49,9 +50,11 @@ fs2 = "0.4"
 futures = "0.3"
 hex = "0.4"
 hkdf = "0.12"
+handlebars = "6"
 hyper = "1"
 jsonwebtoken = { version = "10", default-features = false }
 lru = "0.16"
+indexmap = "2"
 once_cell = "1"
 parking_lot = "0.12"
 rand = { version = "0.9", features = ["std"] }
@@ -88,6 +91,8 @@ greentic-types = { version = "0.4", features = ["telemetry-autoinit"] }
 url = "2"
 uuid = "1"
 wit-bindgen = "0.51"
+wasmtime = { version = "40", features = ["cranelift"] }
+wat = "1"
 greentic_secrets_api = { package = "greentic-secrets-api", version = "0.4", path = "greentic-secrets-api" }
 greentic_secrets_spec = { package = "greentic-secrets-spec", version = "0.4", path = "greentic-secrets-spec" }
 greentic_secrets_core = { package = "greentic-secrets-core", version = "0.4", path = "greentic-secrets-core" }
