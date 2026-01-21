@@ -68,6 +68,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89
       - uses: Swatinem/rust-cache@v2
+      - name: Restore cargo bin
+        uses: actions/download-artifact@v4
+        with:
+          name: cargo-bin
+          path: ~/.cargo/bin
+      - name: Add cargo bin to PATH
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Ensure tool executables
+        run: |
+          chmod +x "$HOME/.cargo/bin/greentic-pack" "$HOME/.cargo/bin/greentic-provision"
       - name: cargo test (all features)
         run: cargo test --workspace --all-features --locked -- --nocapture
       - name: Deny reqwest::blocking in Vault provider
