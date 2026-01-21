@@ -1,0 +1,289 @@
+name: CI + Publish Pipeline
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.89"
+  GREENTIC_PACK_VERSION: "0.4.17"
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dtolnay/rust-toolchain@1.89
+      - name: Cache Cargo binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ runner.os }}-${{ env.GREENTIC_PACK_VERSION }}
+      - name: Install cargo-binstall
+        run: |
+          if ! command -v cargo-binstall >/dev/null 2>&1; then
+            curl -L https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-unknown-linux-gnu.tgz \
+              | tar -xz -C "$HOME/.cargo/bin"
+          fi
+      - name: Install greentic-pack and greentic-provision
+        run: |
+          if ! command -v greentic-pack >/dev/null 2>&1; then
+            cargo binstall -y greentic-pack --version "${GREENTIC_PACK_VERSION}"
+          fi
+          if ! command -v greentic-provision >/dev/null 2>&1; then
+            cargo binstall -y greentic-provision --version "${GREENTIC_PACK_VERSION}"
+          fi
+      - name: Upload cargo bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-bin
+          path: ~/.cargo/bin
+
+  lint:
+    needs: tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt + clippy
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    needs: tools
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test (all features)
+        run: cargo test --workspace --all-features --locked -- --nocapture
+      - name: Deny reqwest::blocking in Vault provider
+        run: |
+          if git grep -n "reqwest::blocking" -- providers/greentic-vault-kv >/dev/null; then
+            echo "Do not use reqwest::blocking (causes runtime panics)" >&2
+            exit 1
+          fi
+
+  local-providers:
+    needs: tools
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        provider: [dev, k8s, vault]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - if: matrix.provider == 'k8s'
+        name: Start KinD
+        uses: helm/kind-action@v1
+      - if: matrix.provider == 'vault'
+        name: Start Vault dev
+        run: |
+          docker run -d --name vault -e VAULT_DEV_ROOT_TOKEN_ID=root -p 8200:8200 hashicorp/vault:1.16
+          echo "VAULT_ADDR=http://127.0.0.1:8200" >> $GITHUB_ENV
+          echo "VAULT_TOKEN=root" >> $GITHUB_ENV
+          for i in {1..20}; do curl -fsS $VAULT_ADDR/v1/sys/health && break || sleep 1; done
+      - name: Conformance
+        continue-on-error: true
+        run: |
+          case "${{ matrix.provider }}" in
+            dev)   RUST_BACKTRACE=1 cargo run -p greentic-secrets-conformance --features provider-dev ;;
+            k8s)   RUST_BACKTRACE=1 cargo run -p greentic-secrets-conformance --features provider-k8s ;;
+            vault) RUST_BACKTRACE=1 cargo run -p greentic-secrets-conformance --features provider-vault ;;
+          esac
+      - name: Mark overall provider result
+        if: failure()
+        run: |
+          echo "local provider '${{ matrix.provider }}' failed" >&2
+          exit 1
+
+  secrets-pack-dry-run:
+    needs: tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - name: Restore cargo bin
+        uses: actions/download-artifact@v4
+        with:
+          name: cargo-bin
+          path: ~/.cargo/bin
+      - name: Add cargo bin to PATH
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y zip yq
+      - name: Build provider packs
+        run: ./scripts/build-provider-packs.sh
+      - name: Validate provisioning fixtures
+        run: ./scripts/validate-provision-fixtures.sh
+      - name: Run secrets pack conformance (dry-run)
+        run: cargo run -p greentic-secrets-test -- e2e --packs dist/packs --timeout-secs 20
+
+  publish-crates:
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - name: Publish changed crates
+        uses: katyo/publish-crates@v2
+        with:
+          path: .
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          ignore-unpublished-changes: true
+          check-repo: true
+          dry-run: false
+
+  publish-components:
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.89 with wasm target
+        uses: dtolnay/rust-toolchain@1.89
+        with:
+          targets: wasm32-wasip2
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Build components (wasm)
+        env:
+          COMPONENTS_REGISTRY: ghcr.io/${{ github.repository_owner }}/components
+        run: ./scripts/build-components.sh
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+      - name: Login to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          echo "${GHCR_TOKEN}" | oras login ghcr.io -u "${GHCR_USER}" --password-stdin
+      - name: Publish components to GHCR
+        run: ./scripts/publish-components.sh
+      - name: Upload component digests
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-digests
+          path: target/components/digests.json
+
+  build-and-push-packs:
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - name: Restore cargo bin
+        uses: actions/download-artifact@v4
+        with:
+          name: cargo-bin
+          path: ~/.cargo/bin
+      - name: Add cargo bin to PATH
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y zip yq
+      - name: Pack unit validation (provider-core extension + schemas + pack.lock)
+        run: cargo test -p greentic-secrets-runner pack_validation
+      - name: Validate packs
+        run: ./scripts/validate-packs.sh
+      - name: Build provider packs
+        run: ./scripts/build-provider-packs.sh
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+      - name: Login to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${GHCR_TOKEN}" | oras login ghcr.io -u "${GHCR_USER}" --password-stdin
+      - name: Write bundle descriptor for store compatibility
+        run: |
+          VERSION=$(cat dist/packs/VERSION)
+          cat > dist/packs/README.txt <<EOF
+          Provider packs for greentic-secrets (version ${VERSION}):
+          - secrets-aws-sm.gtpack
+          - secrets-azure-kv.gtpack
+          - secrets-gcp-sm.gtpack
+          - secrets-k8s.gtpack
+          - secrets-vault-kv.gtpack
+          - bundle: secrets-providers.gtpack
+          EOF
+      - name: Push packs to GHCR
+        run: |
+          set -euo pipefail
+          VERSION=$(cat dist/packs/VERSION)
+          REGISTRY_OWNER=${{ github.repository_owner }}
+          for pack in dist/packs/secrets-*.gtpack; do
+            name=$(basename "${pack}" .gtpack)
+            ref="ghcr.io/${REGISTRY_OWNER}/greentic-packs/${name}:${VERSION}"
+            oras push "${ref}" \
+              "${pack}:application/vnd.greentic.pack+zip"
+            echo "::notice::Pushed ${ref}"
+          done
+          bundle_ref="ghcr.io/${REGISTRY_OWNER}/greentic-packs/secrets-providers:${VERSION}"
+          oras push "${bundle_ref}" \
+            "dist/packs/secrets-providers.gtpack:application/vnd.greentic.pack+zip"
+          echo "::notice::Pushed ${bundle_ref}"
+
+  build-and-push-validators:
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.89 with wasm target
+        uses: dtolnay/rust-toolchain@1.89
+        with:
+          targets: wasm32-wasip2
+      - name: Restore cargo bin
+        uses: actions/download-artifact@v4
+        with:
+          name: cargo-bin
+          path: ~/.cargo/bin
+      - name: Add cargo bin to PATH
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq rsync zip
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+      - name: Login to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${GHCR_TOKEN}" | oras login ghcr.io -u "${GHCR_USER}" --password-stdin
+      - name: Publish validator component to GHCR
+        run: ./scripts/publish-validators.sh
+      - name: Build validator pack
+        run: ./scripts/build-validator-pack.sh
+      - name: Upload validator pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: validators-secrets-pack
+          path: dist/validators-secrets.gtpack

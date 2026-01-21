@@ -1,9 +1,6 @@
 name: Publish crates (single or workspace)
 
 on:
-  push:
-    branches: [ master ]
-    tags: [ "v*" ]
   workflow_dispatch:
 
 jobs:
