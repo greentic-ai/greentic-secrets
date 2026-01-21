@@ -10,7 +10,6 @@ permissions:
 
 env:
   RUST_VERSION: "1.89"
-  GREENTIC_PACK_VERSION: "0.4.17"
 
 jobs:
   tools:
@@ -31,10 +30,10 @@ jobs:
       - name: Install greentic-pack and greentic-provision
         run: |
           if ! command -v greentic-pack >/dev/null 2>&1; then
-            cargo binstall -y greentic-pack --version "${GREENTIC_PACK_VERSION}"
+            cargo binstall -y greentic-pack
           fi
           if ! command -v greentic-provision >/dev/null 2>&1; then
-            cargo binstall -y greentic-provision --version "${GREENTIC_PACK_VERSION}"
+            cargo binstall -y greentic-provision
           fi
       - name: Upload cargo bin
         uses: actions/upload-artifact@v4
