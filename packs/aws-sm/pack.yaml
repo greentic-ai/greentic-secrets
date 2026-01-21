@@ -2,7 +2,23 @@ pack_id: greentic.secrets.aws-sm
 version: __PACK_VERSION__
 kind: provider
 publisher: Greentic
-components: []
+components:
+- id: greentic.secrets.provider.aws_sm
+  version: __PACK_VERSION__
+  source: oci
+  uri: ghcr.io/greentic-ai/components/greentic.secrets.provider.aws_sm:__PACK_VERSION__
+- id: greentic.secrets.generators
+  version: __PACK_VERSION__
+  source: oci
+  uri: ghcr.io/greentic-ai/components/greentic.secrets.generators:__PACK_VERSION__
+- id: greentic.secrets.audit_exporter
+  version: __PACK_VERSION__
+  source: oci
+  uri: ghcr.io/greentic-ai/components/greentic.secrets.audit_exporter:__PACK_VERSION__
+- id: greentic.secrets.policy_validator
+  version: __PACK_VERSION__
+  source: oci
+  uri: ghcr.io/greentic-ai/components/greentic.secrets.policy_validator:__PACK_VERSION__
 dependencies: []
 flows:
 - id: provider_onboard

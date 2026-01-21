@@ -35,6 +35,9 @@ jobs:
           if ! command -v greentic-provision >/dev/null 2>&1; then
             cargo binstall -y greentic-provision
           fi
+      - name: Ensure tool executables
+        run: |
+          chmod +x "$HOME/.cargo/bin/greentic-pack" "$HOME/.cargo/bin/greentic-provision"
       - name: Upload cargo bin
         uses: actions/upload-artifact@v4
         with:
@@ -121,6 +124,9 @@ jobs:
           path: ~/.cargo/bin
       - name: Add cargo bin to PATH
         run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Ensure tool executables
+        run: |
+          chmod +x "$HOME/.cargo/bin/greentic-pack" "$HOME/.cargo/bin/greentic-provision"
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y zip yq
       - name: Build provider packs
@@ -202,6 +208,9 @@ jobs:
           path: ~/.cargo/bin
       - name: Add cargo bin to PATH
         run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Ensure tool executables
+        run: |
+          chmod +x "$HOME/.cargo/bin/greentic-pack" "$HOME/.cargo/bin/greentic-provision"
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y zip yq
       - name: Pack unit validation (provider-core extension + schemas + pack.lock)
@@ -267,6 +276,9 @@ jobs:
           path: ~/.cargo/bin
       - name: Add cargo bin to PATH
         run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Ensure tool executables
+        run: |
+          chmod +x "$HOME/.cargo/bin/greentic-pack" "$HOME/.cargo/bin/greentic-provision"
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq rsync zip
       - name: Set up ORAS
