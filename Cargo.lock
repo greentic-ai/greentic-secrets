@@ -3000,10 +3000,12 @@ version = "1.2.0-research.1"
 dependencies = [
  "async-trait",
  "greentic-types 1.2.0-research.2",
+ "hex",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "serde_yaml_gtc",
+ "sha2 0.11.0",
  "thiserror 2.0.18",
  "time",
 ]
