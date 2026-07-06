@@ -1,0 +1,16 @@
+name: Publish secrets crates to crates.io (scoped)
+on:
+  push:
+    tags: ["secretscrates-v*"]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    uses: greenticai/.github/.github/workflows/crates-publish.yml@main
+    with:
+      crates: "greentic-secrets-api greentic-secrets-spec greentic-secrets-provider-dev greentic-secrets-core greentic-secrets-provider-aws-sm greentic-secrets-provider-gcp-sm greentic-secrets-provider-azure-kv greentic-secrets-provider-k8s greentic-secrets-provider-vault-kv greentic-secrets-broker greentic-secrets-lib greentic-secrets"
+    secrets: inherit
