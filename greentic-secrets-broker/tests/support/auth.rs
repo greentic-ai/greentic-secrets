@@ -105,6 +105,11 @@ impl TestAuth {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.set_issuer(slice::from_ref(&self.issuer));
         validation.set_audience(slice::from_ref(&self.audience));
+        // This helper also mints intentionally-expired tokens (expired_token).
+        // The self-check confirms signature/issuer/audience decode correctly; it
+        // must not reject on expiry, or minting a past-exp token races the
+        // default 60s leeway boundary and panics flakily.
+        validation.validate_exp = false;
         let public_der = public_spki(&self.public_key);
         let public_pem = encode_pem("PUBLIC KEY", &public_der);
         decode::<Value>(
