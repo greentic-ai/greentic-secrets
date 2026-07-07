@@ -8,6 +8,8 @@
   },
   "exclusions": {
     "files": [
+      "components/secrets-generators/src/lib.rs",
+      "components/secrets-policy-validator/src/lib.rs",
       "components/secrets-provider-aws-sm/src/lib.rs",
       "components/secrets-provider-azure-kv/src/lib.rs",
       "components/secrets-provider-gcp-sm/src/lib.rs",
