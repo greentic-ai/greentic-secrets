@@ -80,7 +80,7 @@ pub struct VaultBackendConfig {
 
 impl VaultBackendConfig {
     /// Read the exact environment the provider has always honored: `VAULT_ADDR`,
-    /// the identity vars (via [`VaultAuth::from_env`]), `VAULT_NAMESPACE`, the
+    /// the identity vars (via `VaultAuth::from_env`), `VAULT_NAMESPACE`, the
     /// `VAULT_KV_*` / `VAULT_TRANSIT_*` mount overrides, `VAULT_HTTP_TIMEOUT_SECS`,
     /// and `VAULT_CA_BUNDLE`.
     pub fn from_env() -> Result<Self> {
