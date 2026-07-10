@@ -50,44 +50,32 @@ pub(crate) struct VaultAuthenticator {
 }
 
 impl VaultAuthenticator {
-    /// Resolve the identity from the environment.
-    ///
-    /// `VAULT_TOKEN` wins when present (back-compat). Otherwise `VAULT_K8S_ROLE`
-    /// selects Kubernetes workload identity, with the JWT path and auth mount
-    /// overridable via `VAULT_K8S_JWT_PATH` / `VAULT_K8S_MOUNT`.
-    pub(crate) fn from_env(addr: &str, namespace: Option<String>) -> Result<Self> {
-        let method = if let Ok(token) = std::env::var("VAULT_TOKEN") {
-            let token = token.trim().to_string();
-            if token.is_empty() {
-                bail!("VAULT_TOKEN is set but empty");
-            }
-            Method::Token(token)
-        } else if let Ok(role) = std::env::var("VAULT_K8S_ROLE") {
-            let role = role.trim().to_string();
-            if role.is_empty() {
-                bail!("VAULT_K8S_ROLE is set but empty");
-            }
-            let jwt_path = std::env::var("VAULT_K8S_JWT_PATH")
-                .unwrap_or_else(|_| DEFAULT_K8S_JWT_PATH.to_string());
-            let mount =
-                std::env::var("VAULT_K8S_MOUNT").unwrap_or_else(|_| DEFAULT_K8S_MOUNT.to_string());
-            Method::Kubernetes {
+    /// Build an authenticator from an explicit [`crate::VaultAuth`] — the seam
+    /// that lets a caller construct a Vault client from config rather than the
+    /// process environment (the deployer seeds over a port-forward this way).
+    pub(crate) fn from_auth(
+        auth: crate::VaultAuth,
+        addr: String,
+        namespace: Option<String>,
+    ) -> Self {
+        let method = match auth {
+            crate::VaultAuth::Token(token) => Method::Token(token),
+            crate::VaultAuth::Kubernetes {
                 role,
                 jwt_path,
                 mount,
-            }
-        } else {
-            bail!(
-                "configure Vault identity: set VAULT_TOKEN, or VAULT_K8S_ROLE for Kubernetes workload identity"
-            );
+            } => Method::Kubernetes {
+                role,
+                jwt_path,
+                mount,
+            },
         };
-
-        Ok(Self {
+        Self {
             method,
-            addr: addr.to_string(),
+            addr,
             namespace,
             cached: Mutex::new(None),
-        })
+        }
     }
 
     /// Whether the token can be re-acquired (Kubernetes) versus fixed (static).
@@ -179,6 +167,41 @@ impl fmt::Debug for VaultAuthenticator {
             .field("addr", &self.addr)
             .field("namespace", &self.namespace)
             .finish_non_exhaustive()
+    }
+}
+
+impl crate::VaultAuth {
+    /// Select the Vault auth method from the process environment: `VAULT_TOKEN`
+    /// wins (back-compat), else `VAULT_K8S_ROLE` selects Kubernetes workload
+    /// identity with the JWT path and mount overridable via `VAULT_K8S_JWT_PATH`
+    /// / `VAULT_K8S_MOUNT`. This is the single reader shared by both
+    /// `VaultAuthenticator::from_env` and `VaultBackendConfig::from_env`.
+    pub(crate) fn from_env() -> Result<Self> {
+        if let Ok(token) = std::env::var("VAULT_TOKEN") {
+            let token = token.trim().to_string();
+            if token.is_empty() {
+                bail!("VAULT_TOKEN is set but empty");
+            }
+            Ok(Self::Token(token))
+        } else if let Ok(role) = std::env::var("VAULT_K8S_ROLE") {
+            let role = role.trim().to_string();
+            if role.is_empty() {
+                bail!("VAULT_K8S_ROLE is set but empty");
+            }
+            let jwt_path = std::env::var("VAULT_K8S_JWT_PATH")
+                .unwrap_or_else(|_| DEFAULT_K8S_JWT_PATH.to_string());
+            let mount =
+                std::env::var("VAULT_K8S_MOUNT").unwrap_or_else(|_| DEFAULT_K8S_MOUNT.to_string());
+            Ok(Self::Kubernetes {
+                role,
+                jwt_path,
+                mount,
+            })
+        } else {
+            bail!(
+                "configure Vault identity: set VAULT_TOKEN, or VAULT_K8S_ROLE for Kubernetes workload identity"
+            )
+        }
     }
 }
 
