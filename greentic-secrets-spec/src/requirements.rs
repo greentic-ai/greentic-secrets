@@ -30,12 +30,149 @@ pub struct SeedEntry {
 }
 
 /// Seed value payloads.
+///
+/// Serialization keeps the internally-tagged form (`{ "type": "text", "text": … }`)
+/// so already-released tagged readers stay happy. Deserialization is tolerant: it
+/// accepts both the tagged form and the legacy untagged form (`{ "text": … }`)
+/// that older tooling wrote into `seeds.yaml`, dispatching on the payload key.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 #[cfg_attr(feature = "serde", serde(tag = "type", rename_all = "snake_case"))]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub enum SeedValue {
     Text { text: String },
     Json { json: JsonValue },
     BytesB64 { bytes_b64: String },
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for SeedValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        let value = JsonValue::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| D::Error::custom("SeedValue must be a mapping"))?;
+        if let Some(text) = object.get("text") {
+            let text = text
+                .as_str()
+                .ok_or_else(|| D::Error::custom("SeedValue `text` must be a string"))?;
+            return Ok(SeedValue::Text {
+                text: text.to_string(),
+            });
+        }
+        if let Some(json) = object.get("json") {
+            return Ok(SeedValue::Json { json: json.clone() });
+        }
+        if let Some(bytes_b64) = object.get("bytes_b64") {
+            let bytes_b64 = bytes_b64
+                .as_str()
+                .ok_or_else(|| D::Error::custom("SeedValue `bytes_b64` must be a string"))?;
+            return Ok(SeedValue::BytesB64 {
+                bytes_b64: bytes_b64.to_string(),
+            });
+        }
+        Err(D::Error::custom(
+            "SeedValue: expected one of `text`, `json`, or `bytes_b64`",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seed_value_deserialize_text() {
+        let v: SeedValue = serde_json::from_str(r#"{"text": "hello"}"#).unwrap();
+        assert_eq!(
+            v,
+            SeedValue::Text {
+                text: "hello".into()
+            }
+        );
+    }
+
+    #[test]
+    fn seed_value_deserialize_tagged_text() {
+        let v: SeedValue = serde_json::from_str(r#"{"type": "text", "text": "hello"}"#).unwrap();
+        assert_eq!(
+            v,
+            SeedValue::Text {
+                text: "hello".into()
+            }
+        );
+    }
+
+    #[test]
+    fn seed_value_deserialize_json() {
+        let v: SeedValue = serde_json::from_str(r#"{"json": [1, 2]}"#).unwrap();
+        assert_eq!(
+            v,
+            SeedValue::Json {
+                json: serde_json::json!([1, 2])
+            }
+        );
+    }
+
+    #[test]
+    fn seed_value_deserialize_bytes_b64() {
+        let v: SeedValue = serde_json::from_str(r#"{"bytes_b64": "AAEC"}"#).unwrap();
+        assert_eq!(
+            v,
+            SeedValue::BytesB64 {
+                bytes_b64: "AAEC".into()
+            }
+        );
+    }
+
+    #[test]
+    fn seed_value_rejects_non_mapping() {
+        let err = serde_json::from_str::<SeedValue>(r#""plain""#).unwrap_err();
+        assert!(err.to_string().contains("must be a mapping"));
+    }
+
+    #[test]
+    fn seed_value_rejects_unknown_keys() {
+        let err = serde_json::from_str::<SeedValue>(r#"{"unknown": 1}"#).unwrap_err();
+        assert!(err.to_string().contains("expected one of"));
+    }
+
+    #[test]
+    fn seed_value_rejects_non_string_text() {
+        let err = serde_json::from_str::<SeedValue>(r#"{"text": 42}"#).unwrap_err();
+        assert!(err.to_string().contains("must be a string"));
+    }
+
+    #[test]
+    fn seed_value_rejects_non_string_bytes_b64() {
+        let err = serde_json::from_str::<SeedValue>(r#"{"bytes_b64": 99}"#).unwrap_err();
+        assert!(err.to_string().contains("must be a string"));
+    }
+
+    #[test]
+    fn seed_value_serialize_roundtrip() {
+        let original = SeedValue::Text { text: "rt".into() };
+        let json = serde_json::to_string(&original).unwrap();
+        let back: SeedValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, back);
+    }
+
+    #[test]
+    fn seed_doc_roundtrip() {
+        let doc = SeedDoc {
+            entries: vec![SeedEntry {
+                uri: "secret://test/key".into(),
+                format: SecretFormat::Text,
+                value: SeedValue::Text { text: "v".into() },
+                description: Some("desc".into()),
+            }],
+        };
+        let json = serde_json::to_string(&doc).unwrap();
+        let back: SeedDoc = serde_json::from_str(&json).unwrap();
+        assert_eq!(doc, back);
+    }
 }
