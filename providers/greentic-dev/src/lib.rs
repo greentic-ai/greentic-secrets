@@ -347,6 +347,17 @@ impl DevBackend {
     ///   transiently holds an excluded entry and any failure leaves `dest`
     ///   untouched.
     ///
+    /// # Limitation
+    ///
+    /// The alias and no-clobber guards resolve pathnames, so the source-integrity
+    /// and no-clobber guarantees assume the **directories on the `src` and `dest`
+    /// paths are not concurrently manipulated by another actor** (e.g. a symlink
+    /// in `dest`'s parent repointed between the snapshot and the publish). Callers
+    /// must stage to a directory they control — a private temp dir is ideal.
+    /// Hardening against a hostile dest-parent (openat/`O_NOFOLLOW`
+    /// directory-handle operations) is out of scope for this local-store staging
+    /// primitive.
+    ///
     /// `src` must exist and `dest` must be a **fresh** path that does not yet
     /// exist and does not resolve to `src` — a pre-existing `dest` (including
     /// `src`, a symlink to it, or a file a live backend still holds open) is
