@@ -113,6 +113,31 @@ struct Persistence {
 }
 
 impl Persistence {
+    /// Parse the persisted state out of an already-open, already-locked file.
+    /// Shared by [`load`](Self::load) (exclusive lock) and
+    /// [`snapshot`](Self::snapshot) (shared lock).
+    fn read_state(file: &std::fs::File) -> Result<State> {
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            let line = line.map_err(|err| Error::Storage(err.to_string()))?;
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some((key, value)) = line.split_once('=')
+                && key.trim() == ENV_KEY
+            {
+                let decoded = STANDARD_NO_PAD
+                    .decode(value.trim())
+                    .map_err(|err| Error::Storage(err.to_string()))?;
+                let persisted: PersistedState = serde_json::from_slice(&decoded)
+                    .map_err(|err| Error::Storage(err.to_string()))?;
+                return Ok(persisted.into_state());
+            }
+        }
+        Ok(State::default())
+    }
+
     fn load(path: PathBuf) -> Result<(State, Self)> {
         let file = OpenOptions::new()
             .read(true)
@@ -125,30 +150,28 @@ impl Persistence {
         file.lock_exclusive()
             .map_err(|err| Error::Storage(err.to_string()))?;
 
-        let result = (|| -> Result<State> {
-            let reader = BufReader::new(&file);
-            for line in reader.lines() {
-                let line = line.map_err(|err| Error::Storage(err.to_string()))?;
-                if line.trim().is_empty() || line.starts_with('#') {
-                    continue;
-                }
-
-                if let Some((key, value)) = line.split_once('=')
-                    && key.trim() == ENV_KEY
-                {
-                    let decoded = STANDARD_NO_PAD
-                        .decode(value.trim())
-                        .map_err(|err| Error::Storage(err.to_string()))?;
-                    let persisted: PersistedState = serde_json::from_slice(&decoded)
-                        .map_err(|err| Error::Storage(err.to_string()))?;
-                    return Ok(persisted.into_state());
-                }
-            }
-            Ok(State::default())
-        })();
+        let result = Self::read_state(&file);
 
         let _ = fs2::FileExt::unlock(&file);
         result.map(|state| (state, Self { path }))
+    }
+
+    /// Read a consistent snapshot of the persisted state WITHOUT creating or
+    /// modifying the file. Opens read-only (so a read-only store still works)
+    /// and holds a shared lock during the read; the shared lock conflicts with
+    /// [`persist`](Self::persist)'s exclusive lock, so a concurrent writer
+    /// cannot yield a torn snapshot. A missing file is an error, never a
+    /// silently-recreated empty state.
+    fn snapshot(path: &Path) -> Result<State> {
+        let file = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|err| Error::Storage(err.to_string()))?;
+        file.lock_shared()
+            .map_err(|err| Error::Storage(err.to_string()))?;
+        let result = Self::read_state(&file);
+        let _ = fs2::FileExt::unlock(&file);
+        result
     }
 
     fn persist(&self, state: &State) -> Result<()> {
@@ -280,44 +303,46 @@ impl DevBackend {
     /// is staged into an untrusted runtime seed.
     ///
     /// The operation is transactional and lock-safe:
-    /// - it reads a consistent snapshot of `src` under `src`'s advisory lock, so a
-    ///   concurrent writer cannot yield a torn or empty result;
-    /// - it never writes `src`;
+    /// - it reads a consistent snapshot of `src` read-only under a shared lock
+    ///   (which conflicts with the writer's exclusive lock), so a concurrent
+    ///   writer cannot yield a torn or empty result and a `src` removed between
+    ///   calls fails loudly instead of being recreated empty;
+    /// - it never opens `src` for writing;
     /// - it builds the sanitized store in a private temp file in `dest`'s
-    ///   directory and atomically renames it over `dest`, so `dest` never
+    ///   directory and publishes it with a **no-clobber** rename, so `dest` never
     ///   transiently holds an excluded entry and any failure leaves `dest`
     ///   untouched.
     ///
-    /// `src` must exist and `dest` must not resolve to `src` (a fresh path).
+    /// `src` must exist and `dest` must be a **fresh** path that does not yet
+    /// exist — a pre-existing `dest` (including `src`, a symlink to it, or a file
+    /// a live backend still holds open) is rejected rather than replaced, since
+    /// replacing it could let a stale in-memory snapshot resurrect an excluded
+    /// record at `dest`.
     pub fn export_excluding(src: &Path, dest: &Path, exclude: &[&SecretUri]) -> Result<()> {
-        if !src.exists() {
-            return Err(Error::NotFound {
-                entity: src.display().to_string(),
-            });
-        }
-        // Refuse a destination that resolves to the source (same path or a
-        // symlink to it), which would rewrite the operator's real store.
-        if let (Ok(canonical_src), Ok(canonical_dest)) = (src.canonicalize(), dest.canonicalize())
-            && canonical_src == canonical_dest
-        {
-            return Err(Error::Storage(
-                "export destination must differ from the source store".to_string(),
-            ));
-        }
+        // Consistent read-only snapshot under a shared lock; src is never opened
+        // for writing or created.
+        let mut state = Persistence::snapshot(src)?;
 
-        // Consistent snapshot under src's advisory lock; src is not written.
-        let (mut state, _src) = Persistence::load(src.to_path_buf())?;
+        // Backend versions live under the versionless URI key (one
+        // `Vec<VersionEntry>` per versionless URI), so normalize each exclusion
+        // to its versionless identity — excluding `…/name@1` must still strip
+        // every version of `…/name`.
         for uri in exclude {
-            state.entries.remove(&uri.to_string());
+            let key = (**uri)
+                .clone()
+                .with_version(None)
+                .map_err(|err| Error::Storage(err.to_string()))?
+                .to_string();
+            state.entries.remove(&key);
         }
 
         let persisted = PersistedState::from_state(&state);
         let json = serde_json::to_vec(&persisted).map_err(|err| Error::Storage(err.to_string()))?;
         let encoded = STANDARD_NO_PAD.encode(json);
 
-        // Publish atomically: write a private temp file in dest's directory,
-        // fsync, then rename over dest. The excluded entries are never written,
-        // so nothing to erase after the fact.
+        // Publish atomically to a fresh dest: write a private temp file in dest's
+        // directory, fsync, then rename with no-clobber. The excluded entries are
+        // never written, so there is nothing to erase after the fact.
         let dir = dest
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -328,7 +353,7 @@ impl DevBackend {
         tmp.as_file()
             .sync_all()
             .map_err(|err| Error::Storage(err.to_string()))?;
-        tmp.persist(dest)
+        tmp.persist_noclobber(dest)
             .map_err(|err| Error::Storage(err.to_string()))?;
         Ok(())
     }
@@ -839,23 +864,56 @@ mod tests {
     }
 
     #[test]
-    fn export_excluding_rejects_missing_src_and_self_destination() {
+    fn export_excluding_rejects_missing_src_and_pre_existing_dest() {
         let temp = unique_temp_dir("export-guards");
         let src = temp.join(".dev.secrets.env");
         let dest = temp.join(".seed.secrets.env");
         let scope = sample_scope();
         let cred = sample_uri(&scope, "kv", "deployer-credential");
 
-        // Missing src → error, and no dest is created.
+        // Missing src → error (no silent recreate), and no dest is created.
         assert!(DevBackend::export_excluding(&src, &dest, &[&cred]).is_err());
+        assert!(!src.exists(), "a missing source must not be recreated");
         assert!(!dest.exists());
 
-        // dest resolving to src → rejected, and src is untouched.
         seed_store(&src, &[(&cred, b"SA-KEY")]);
+
+        // dest == src → rejected (no-clobber), src untouched.
         assert!(DevBackend::export_excluding(&src, &src, &[&cred]).is_err());
         assert!(
             persisted_keys(&src).contains(&cred.to_string()),
-            "source must be untouched when the self-destination guard fires"
+            "source must be untouched when dest resolves to it"
+        );
+
+        // A pre-existing, unrelated dest → rejected rather than replaced (a live
+        // backend could still hold its stale state and later resurrect a record).
+        fs::write(&dest, b"pre-existing\n").unwrap();
+        assert!(DevBackend::export_excluding(&src, &dest, &[&cred]).is_err());
+        assert_eq!(
+            fs::read(&dest).unwrap(),
+            b"pre-existing\n",
+            "a pre-existing dest must be left untouched, not overwritten"
+        );
+
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn export_excluding_normalizes_versioned_exclusions() {
+        // A stored key is versionless; excluding it with an `@version` suffix
+        // must still strip the whole (versioned + versionless) entry.
+        let temp = unique_temp_dir("export-version");
+        let src = temp.join(".dev.secrets.env");
+        let dest = temp.join(".seed.secrets.env");
+        let scope = sample_scope();
+        let cred = sample_uri(&scope, "kv", "deployer-credential");
+        seed_store(&src, &[(&cred, b"SA-KEY")]);
+
+        let versioned = cred.clone().with_version(Some("1")).unwrap();
+        DevBackend::export_excluding(&src, &dest, &[&versioned]).unwrap();
+        assert!(
+            !persisted_keys(&dest).contains(&cred.to_string()),
+            "a version-qualified exclusion must strip the versionless stored key"
         );
 
         fs::remove_dir_all(&temp).unwrap();
