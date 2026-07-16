@@ -62,6 +62,40 @@ fn xor_with_key(input: &[u8], key: &[u8; 32]) -> Vec<u8> {
         .collect()
 }
 
+/// Whether two paths refer to the same store — lexically equal, or resolving to
+/// the same file (catches a symlinked destination). Used to refuse an export
+/// that would rewrite its own source.
+fn paths_alias(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    matches!((a.canonicalize(), b.canonicalize()), (Ok(ca), Ok(cb)) if ca == cb)
+}
+
+/// The versionless canonical form of a stored key, or `None` if it is not a
+/// parseable secret URI. Backend keys are `SecretUri::to_string()` outputs, so
+/// this normally round-trips; `None` only for a corrupt store line.
+fn versionless_key(key: &str) -> Option<String> {
+    SecretUri::parse(key)
+        .ok()?
+        .with_version(None)
+        .ok()
+        .map(|uri| uri.to_string())
+}
+
+/// The versionless canonical form of each exclusion URI.
+fn versionless_keys(uris: &[&SecretUri]) -> Result<Vec<String>> {
+    uris.iter()
+        .map(|uri| {
+            (**uri)
+                .clone()
+                .with_version(None)
+                .map(|normalized| normalized.to_string())
+                .map_err(|err| Error::Storage(err.to_string()))
+        })
+        .collect()
+}
+
 #[derive(Clone, Default)]
 struct State {
     entries: BTreeMap<String, Vec<VersionEntry>>,
@@ -314,27 +348,41 @@ impl DevBackend {
     ///   untouched.
     ///
     /// `src` must exist and `dest` must be a **fresh** path that does not yet
-    /// exist — a pre-existing `dest` (including `src`, a symlink to it, or a file
-    /// a live backend still holds open) is rejected rather than replaced, since
-    /// replacing it could let a stale in-memory snapshot resurrect an excluded
-    /// record at `dest`.
+    /// exist and does not resolve to `src` — a pre-existing `dest` (including
+    /// `src`, a symlink to it, or a file a live backend still holds open) is
+    /// rejected rather than replaced, since replacing it could let a stale
+    /// in-memory snapshot resurrect an excluded record at `dest`.
     pub fn export_excluding(src: &Path, dest: &Path, exclude: &[&SecretUri]) -> Result<()> {
+        // Reject a destination that is (or resolves to) the source up front. This
+        // is deterministic (no publish-time TOCTOU): were `src == dest`, a
+        // concurrent unlink of `src` after the snapshot could otherwise let the
+        // no-clobber publish succeed against the vanished pathname and recreate
+        // the operator's store with excluded records removed.
+        if paths_alias(src, dest) {
+            return Err(Error::Storage(
+                "export destination must differ from the source store".to_string(),
+            ));
+        }
+
         // Consistent read-only snapshot under a shared lock; src is never opened
         // for writing or created.
         let mut state = Persistence::snapshot(src)?;
 
-        // Backend versions live under the versionless URI key (one
-        // `Vec<VersionEntry>` per versionless URI), so normalize each exclusion
-        // to its versionless identity — excluding `…/name@1` must still strip
-        // every version of `…/name`.
-        for uri in exclude {
-            let key = (**uri)
-                .clone()
-                .with_version(None)
-                .map_err(|err| Error::Storage(err.to_string()))?
-                .to_string();
-            state.entries.remove(&key);
-        }
+        // Compare on canonical (versionless) identity on BOTH sides. DevStore
+        // accepts version-qualified URIs, so a store can hold `…/name@1` and an
+        // exclusion can be `…/name` (or `…/name@2`); every version of the
+        // underlying secret must be stripped. Backend versions also live under a
+        // single versionless key, so this strips the whole `Vec<VersionEntry>`.
+        let excluded = versionless_keys(exclude)?;
+        state
+            .entries
+            .retain(|stored_key, _| match versionless_key(stored_key) {
+                Some(canonical) => !excluded.contains(&canonical),
+                // An unparseable stored key cannot equal a well-formed excluded
+                // URI, so it is never the excluded secret — keep it rather than
+                // risk dropping an unrelated runtime entry.
+                None => true,
+            });
 
         let persisted = PersistedState::from_state(&state);
         let json = serde_json::to_vec(&persisted).map_err(|err| Error::Storage(err.to_string()))?;
@@ -914,6 +962,33 @@ mod tests {
         assert!(
             !persisted_keys(&dest).contains(&cred.to_string()),
             "a version-qualified exclusion must strip the versionless stored key"
+        );
+
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn export_excluding_strips_a_version_qualified_stored_key() {
+        // The store itself holds a version-qualified key `…@1`; a versionless
+        // exclusion must still strip it (canonical-identity comparison).
+        let temp = unique_temp_dir("export-stored-version");
+        let src = temp.join(".dev.secrets.env");
+        let dest = temp.join(".seed.secrets.env");
+        let scope = sample_scope();
+        let cred = sample_uri(&scope, "kv", "deployer-credential");
+        let versioned = cred.clone().with_version(Some("1")).unwrap();
+        seed_store(&src, &[(&versioned, b"SA-KEY")]);
+        assert!(
+            persisted_keys(&src).iter().any(|key| key.ends_with("@1")),
+            "the stored key is version-qualified"
+        );
+
+        DevBackend::export_excluding(&src, &dest, &[&cred]).unwrap();
+        assert!(
+            persisted_keys(&dest)
+                .iter()
+                .all(|key| !key.contains("deployer-credential")),
+            "a versionless exclusion must strip a version-qualified stored key"
         );
 
         fs::remove_dir_all(&temp).unwrap();
