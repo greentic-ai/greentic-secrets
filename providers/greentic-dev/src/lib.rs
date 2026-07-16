@@ -11,8 +11,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tempfile::NamedTempFile;
 
 const DEFAULT_PERSIST_PATH: &str = ".dev.secrets.env";
 const PERSIST_ENV: &str = "GREENTIC_DEV_SECRETS_PATH";
@@ -268,31 +269,68 @@ impl DevBackend {
         }
     }
 
-    /// Hard-remove **every** version of `uri` from the store, persisting the
-    /// result. Returns `true` if an entry existed.
+    /// Write a sanitized copy of the dev-store persisted at `src` to `dest`,
+    /// hard-excluding every entry whose URI is in `exclude`.
     ///
-    /// Unlike [`SecretsBackend::delete`], which appends a `deleted` tombstone
-    /// and leaves the prior live version's encrypted `record` in the persisted
-    /// file, `purge` drops the whole key: no residual ciphertext for `uri`
-    /// remains, so it cannot be recovered by anyone who later reads the raw
-    /// persisted bytes with the master key. Intended for stripping control-plane
-    /// material from a copy of a store before it is staged into an untrusted
-    /// runtime — never call it on a store you still need to read `uri` from.
-    pub fn purge(&self, uri: &SecretUri) -> Result<bool> {
-        let mut state_guard = self.state.write();
-        let removed = state_guard.entries.remove(&uri.to_string()).is_some();
-        let snapshot = if self.persistence.is_some() {
-            Some(state_guard.clone())
-        } else {
-            None
-        };
-        drop(state_guard);
-
-        if let Some(state) = snapshot {
-            self.persist_if_needed(state)?;
+    /// Excluded URIs leave **no** residual ciphertext in `dest`: the whole key is
+    /// dropped from the snapshot before it is ever written, unlike the
+    /// tombstoning [`SecretsBackend::delete`] (which leaves the prior live
+    /// version's encrypted `record` on disk). Intended for stripping
+    /// control-plane material — e.g. a bound deployer credential — before a store
+    /// is staged into an untrusted runtime seed.
+    ///
+    /// The operation is transactional and lock-safe:
+    /// - it reads a consistent snapshot of `src` under `src`'s advisory lock, so a
+    ///   concurrent writer cannot yield a torn or empty result;
+    /// - it never writes `src`;
+    /// - it builds the sanitized store in a private temp file in `dest`'s
+    ///   directory and atomically renames it over `dest`, so `dest` never
+    ///   transiently holds an excluded entry and any failure leaves `dest`
+    ///   untouched.
+    ///
+    /// `src` must exist and `dest` must not resolve to `src` (a fresh path).
+    pub fn export_excluding(src: &Path, dest: &Path, exclude: &[&SecretUri]) -> Result<()> {
+        if !src.exists() {
+            return Err(Error::NotFound {
+                entity: src.display().to_string(),
+            });
+        }
+        // Refuse a destination that resolves to the source (same path or a
+        // symlink to it), which would rewrite the operator's real store.
+        if let (Ok(canonical_src), Ok(canonical_dest)) = (src.canonicalize(), dest.canonicalize())
+            && canonical_src == canonical_dest
+        {
+            return Err(Error::Storage(
+                "export destination must differ from the source store".to_string(),
+            ));
         }
 
-        Ok(removed)
+        // Consistent snapshot under src's advisory lock; src is not written.
+        let (mut state, _src) = Persistence::load(src.to_path_buf())?;
+        for uri in exclude {
+            state.entries.remove(&uri.to_string());
+        }
+
+        let persisted = PersistedState::from_state(&state);
+        let json = serde_json::to_vec(&persisted).map_err(|err| Error::Storage(err.to_string()))?;
+        let encoded = STANDARD_NO_PAD.encode(json);
+
+        // Publish atomically: write a private temp file in dest's directory,
+        // fsync, then rename over dest. The excluded entries are never written,
+        // so nothing to erase after the fact.
+        let dir = dest
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut tmp = NamedTempFile::new_in(dir).map_err(|err| Error::Storage(err.to_string()))?;
+        tmp.write_all(format!("{ENV_KEY}={encoded}\n").as_bytes())
+            .map_err(|err| Error::Storage(err.to_string()))?;
+        tmp.as_file()
+            .sync_all()
+            .map_err(|err| Error::Storage(err.to_string()))?;
+        tmp.persist(dest)
+            .map_err(|err| Error::Storage(err.to_string()))?;
+        Ok(())
     }
 
     fn persist_if_needed(&self, state: State) -> Result<()> {
@@ -708,95 +746,134 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn purge_removes_every_version() {
-        let backend = DevBackend::new();
-        let scope = sample_scope();
-        let uri = sample_uri(&scope, "kv", "deployer-credential");
-
-        backend
-            .put(record(&uri, ContentType::Text, b"v1".to_vec()))
-            .unwrap();
-        backend
-            .put(record(&uri, ContentType::Text, b"v2".to_vec()))
-            .unwrap();
-        assert!(backend.exists(&uri).unwrap());
-
-        assert!(
-            backend.purge(&uri).unwrap(),
-            "purge reports the entry existed"
-        );
-        assert!(!backend.exists(&uri).unwrap());
-        assert!(backend.get(&uri, None).unwrap().is_none());
-        assert!(backend.get(&uri, Some(1)).unwrap().is_none());
-        assert!(backend.versions(&uri).unwrap().is_empty());
-
-        assert!(
-            !backend.purge(&uri).unwrap(),
-            "purging an absent uri is a no-op, not an error"
-        );
-    }
-
-    #[test]
-    fn purge_erases_ciphertext_from_disk_where_delete_leaves_it() {
-        let temp = std::env::temp_dir().join(format!(
-            "greentic-dev-purge-test-{}-{}",
+    fn unique_temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "greentic-dev-{tag}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        fs::create_dir(&temp).unwrap();
-        let path = temp.join(".dev.secrets.env");
+        fs::create_dir(&dir).unwrap();
+        dir
+    }
 
+    fn seed_store(path: &Path, entries: &[(&SecretUri, &[u8])]) {
+        let backend = DevBackend::with_persistence(path).unwrap();
+        for (uri, payload) in entries {
+            backend
+                .put(record(uri, ContentType::Text, payload.to_vec()))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn export_excluding_drops_only_excluded_keys_and_leaves_src_intact() {
+        let temp = unique_temp_dir("export");
+        let src = temp.join(".dev.secrets.env");
+        let dest = temp.join(".seed.secrets.env");
         let scope = sample_scope();
         let cred = sample_uri(&scope, "kv", "deployer-credential");
         let runtime = sample_uri(&scope, "kv", "runtime-token");
+        seed_store(&src, &[(&cred, b"SA-KEY"), (&runtime, b"tok")]);
 
-        // delete() only tombstones: the prior live version's encrypted record
-        // stays on disk, recoverable by anyone reading the raw persisted bytes.
-        {
-            let backend = DevBackend::with_persistence(&path).unwrap();
-            backend
-                .put(record(&cred, ContentType::Text, b"SA-KEY".to_vec()))
-                .unwrap();
-            backend.delete(&cred).unwrap();
-        }
+        DevBackend::export_excluding(&src, &dest, &[&cred]).unwrap();
+
+        // dest: the credential key is gone entirely (no record, no ciphertext);
+        // the runtime secret is carried over.
+        let dest_keys = persisted_keys(&dest);
         assert!(
-            persisted_keys(&path).contains(&cred.to_string()),
-            "delete leaves the key (and its ciphertext) persisted — the H3 leak"
-        );
-
-        // purge() drops the whole key: no residual ciphertext survives, while a
-        // co-located runtime secret is left intact.
-        fs::remove_file(&path).unwrap();
-        {
-            let backend = DevBackend::with_persistence(&path).unwrap();
-            backend
-                .put(record(&cred, ContentType::Text, b"SA-KEY".to_vec()))
-                .unwrap();
-            backend
-                .put(record(&runtime, ContentType::Text, b"tok".to_vec()))
-                .unwrap();
-            assert!(backend.purge(&cred).unwrap());
-        }
-
-        let keys = persisted_keys(&path);
-        assert!(
-            !keys.contains(&cred.to_string()),
-            "purged credential must not persist"
+            !dest_keys.contains(&cred.to_string()),
+            "excluded credential must not persist in the staged copy"
         );
         assert!(
-            keys.contains(&runtime.to_string()),
-            "co-located runtime secret must survive the purge"
+            dest_keys.contains(&runtime.to_string()),
+            "runtime secret must survive the export"
+        );
+
+        // src: never modified — still resolves both entries.
+        let src_keys = persisted_keys(&src);
+        assert!(
+            src_keys.contains(&cred.to_string()) && src_keys.contains(&runtime.to_string()),
+            "source store must be left intact"
         );
 
         // A fresh reader (the workload's view of the staged file) cannot recover
         // the credential, but still resolves the runtime secret.
-        let reopened = DevBackend::with_persistence(&path).unwrap();
+        let reopened = DevBackend::with_persistence(&dest).unwrap();
         assert!(reopened.get(&cred, None).unwrap().is_none());
         assert!(reopened.get(&runtime, None).unwrap().is_some());
+
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn export_excluding_removes_key_that_delete_would_leave_on_disk() {
+        // Negative control: delete() only tombstones (the key + ciphertext stay
+        // on disk — the H3 leak); export drops the whole key.
+        let temp = unique_temp_dir("export-vs-delete");
+        let src = temp.join(".dev.secrets.env");
+        let dest = temp.join(".seed.secrets.env");
+        let scope = sample_scope();
+        let cred = sample_uri(&scope, "kv", "deployer-credential");
+
+        seed_store(&src, &[(&cred, b"SA-KEY")]);
+        let backend = DevBackend::with_persistence(&src).unwrap();
+        backend.delete(&cred).unwrap();
+        drop(backend);
+        assert!(
+            persisted_keys(&src).contains(&cred.to_string()),
+            "delete tombstones but leaves the key + ciphertext on disk"
+        );
+
+        fs::remove_file(&src).unwrap();
+        seed_store(&src, &[(&cred, b"SA-KEY")]);
+        DevBackend::export_excluding(&src, &dest, &[&cred]).unwrap();
+        assert!(
+            !persisted_keys(&dest).contains(&cred.to_string()),
+            "export drops the whole key — no residual ciphertext"
+        );
+
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn export_excluding_rejects_missing_src_and_self_destination() {
+        let temp = unique_temp_dir("export-guards");
+        let src = temp.join(".dev.secrets.env");
+        let dest = temp.join(".seed.secrets.env");
+        let scope = sample_scope();
+        let cred = sample_uri(&scope, "kv", "deployer-credential");
+
+        // Missing src → error, and no dest is created.
+        assert!(DevBackend::export_excluding(&src, &dest, &[&cred]).is_err());
+        assert!(!dest.exists());
+
+        // dest resolving to src → rejected, and src is untouched.
+        seed_store(&src, &[(&cred, b"SA-KEY")]);
+        assert!(DevBackend::export_excluding(&src, &src, &[&cred]).is_err());
+        assert!(
+            persisted_keys(&src).contains(&cred.to_string()),
+            "source must be untouched when the self-destination guard fires"
+        );
+
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn export_excluding_with_no_exclusions_carries_all_entries() {
+        let temp = unique_temp_dir("export-empty");
+        let src = temp.join(".dev.secrets.env");
+        let dest = temp.join(".seed.secrets.env");
+        let scope = sample_scope();
+        let a = sample_uri(&scope, "kv", "alpha");
+        let b = sample_uri(&scope, "kv", "beta");
+        seed_store(&src, &[(&a, b"1"), (&b, b"2")]);
+
+        DevBackend::export_excluding(&src, &dest, &[]).unwrap();
+        let keys = persisted_keys(&dest);
+        assert!(keys.contains(&a.to_string()) && keys.contains(&b.to_string()));
 
         fs::remove_dir_all(&temp).unwrap();
     }

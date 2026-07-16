@@ -515,14 +515,20 @@ impl DevStore {
         })
     }
 
-    /// Write a copy of the dev-store file at `src` to `dest`, hard-removing every
-    /// entry whose URI is in `exclude`.
+    /// Write a sanitized copy of the dev-store file at `src` to `dest`,
+    /// hard-removing every entry whose URI is in `exclude`.
     ///
     /// Unlike a tombstoning delete, an excluded URI leaves **no** ciphertext in
-    /// `dest`: it cannot be recovered from the raw bytes even by a holder of the
-    /// store's master key. Every other entry is carried over verbatim (records
-    /// are never decrypted). `src` is never modified; `dest` is overwritten if it
-    /// already exists. An `exclude` URI that is absent from `src` is a no-op.
+    /// `dest`: the whole key is dropped before anything is written, so it cannot
+    /// be recovered from the raw bytes even by a holder of the store's master
+    /// key. Every other entry is carried over verbatim (records are never
+    /// decrypted). An `exclude` URI absent from `src` is a no-op.
+    ///
+    /// Transactional and lock-safe (see [`DevBackend::export_excluding`]): `src`
+    /// is read under its advisory lock and never modified; `dest` is published by
+    /// atomic rename, so it never transiently holds an excluded entry and a
+    /// failure leaves it untouched. `src` must exist and `dest` must be a fresh
+    /// path that does not resolve to `src`.
     ///
     /// The intended use is stripping control-plane material — e.g. a bound
     /// deployer credential (`credentials_ref`) — from a store before it is staged
@@ -535,20 +541,13 @@ impl DevStore {
     ) -> Result<()> {
         use greentic_secrets_provider_dev::DevBackend;
 
-        std::fs::copy(src, dest)
-            .map_err(|err| Error::Backend(format!("copy dev store {src:?} -> {dest:?}: {err}")))?;
-        if exclude.is_empty() {
-            return Ok(());
-        }
-        let backend = DevBackend::with_persistence(dest.to_path_buf())
-            .map_err(|err| Error::Backend(err.to_string()))?;
+        let mut parsed = Vec::with_capacity(exclude.len());
         for uri in exclude {
-            let parsed = SecretUri::parse(uri)?;
-            backend
-                .purge(&parsed)
-                .map_err(|err| Error::Backend(err.to_string()))?;
+            parsed.push(SecretUri::parse(uri)?);
         }
-        Ok(())
+        let refs: Vec<&SecretUri> = parsed.iter().collect();
+        DevBackend::export_excluding(src, dest, &refs)
+            .map_err(|err| Error::Backend(err.to_string()))
     }
 }
 
@@ -667,27 +666,74 @@ mod tests {
             "excluded credential must not resolve from the staged copy"
         );
 
-        // The credential leaves no residual key/ciphertext in the raw dest bytes.
-        let raw = std::fs::read_to_string(&dest).unwrap();
+        // Decode the persisted state and assert the credential's key (and hence
+        // its record) is gone — a raw substring check is vacuous because the body
+        // is base64 and cannot contain the URI's hyphen.
+        let keys = persisted_dest_keys(&dest);
         assert!(
-            !raw.contains("deployer-credential"),
-            "purged credential key must not persist in the staged copy"
+            !keys.iter().any(|key| key.contains("deployer-credential")),
+            "excluded credential must leave no key/ciphertext in the staged copy"
+        );
+        assert!(
+            keys.iter().any(|key| key.contains("runtime-token")),
+            "runtime secret must remain in the staged copy"
         );
     }
 
-    #[test]
+    /// Decode a persisted dev-store file into the URI keys it holds on disk, so a
+    /// test can assert on residual ciphertext rather than base64 substrings.
     #[cfg(feature = "dev-store")]
-    fn copy_excluding_with_empty_exclusion_is_a_verbatim_copy() {
+    fn persisted_dest_keys(path: &std::path::Path) -> Vec<String> {
+        use base64::engine::general_purpose::STANDARD_NO_PAD;
+        let contents = std::fs::read_to_string(path).unwrap();
+        let encoded = contents
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("SECRETS_BACKEND_STATE="))
+            .expect("persisted state line");
+        let bytes = STANDARD_NO_PAD.decode(encoded.trim()).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        json["secrets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|secret| secret["key"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "dev-store")]
+    async fn copy_excluding_with_empty_exclusion_carries_every_entry() {
         let dir = tempdir().unwrap();
         let src = dir.path().join(".dev.secrets.env");
         let dest = dir.path().join(".seed.secrets.env");
-        std::fs::write(&src, b"SECRETS_BACKEND_STATE=eyJzZWNyZXRzIjpbXX0\n").unwrap();
+        {
+            let store = DevStore::with_path(&src).unwrap();
+            store
+                .put("secrets://dev/acme/_/kv/alpha", SecretFormat::Text, b"1")
+                .await
+                .unwrap();
+            store
+                .put("secrets://dev/acme/_/kv/beta", SecretFormat::Text, b"2")
+                .await
+                .unwrap();
+        }
 
         DevStore::copy_excluding(&src, &dest, &[]).unwrap();
+
+        let dest_store = DevStore::with_path(&dest).unwrap();
         assert_eq!(
-            std::fs::read(&src).unwrap(),
-            std::fs::read(&dest).unwrap(),
-            "an empty exclusion list must copy the store through byte-for-byte"
+            dest_store
+                .get("secrets://dev/acme/_/kv/alpha")
+                .await
+                .unwrap(),
+            b"1"
+        );
+        assert_eq!(
+            dest_store
+                .get("secrets://dev/acme/_/kv/beta")
+                .await
+                .unwrap(),
+            b"2"
         );
     }
 
