@@ -268,6 +268,33 @@ impl DevBackend {
         }
     }
 
+    /// Hard-remove **every** version of `uri` from the store, persisting the
+    /// result. Returns `true` if an entry existed.
+    ///
+    /// Unlike [`SecretsBackend::delete`], which appends a `deleted` tombstone
+    /// and leaves the prior live version's encrypted `record` in the persisted
+    /// file, `purge` drops the whole key: no residual ciphertext for `uri`
+    /// remains, so it cannot be recovered by anyone who later reads the raw
+    /// persisted bytes with the master key. Intended for stripping control-plane
+    /// material from a copy of a store before it is staged into an untrusted
+    /// runtime — never call it on a store you still need to read `uri` from.
+    pub fn purge(&self, uri: &SecretUri) -> Result<bool> {
+        let mut state_guard = self.state.write();
+        let removed = state_guard.entries.remove(&uri.to_string()).is_some();
+        let snapshot = if self.persistence.is_some() {
+            Some(state_guard.clone())
+        } else {
+            None
+        };
+        drop(state_guard);
+
+        if let Some(state) = snapshot {
+            self.persist_if_needed(state)?;
+        }
+
+        Ok(removed)
+    }
+
     fn persist_if_needed(&self, state: State) -> Result<()> {
         if let Some(persistence) = &self.persistence {
             persistence.persist(&state)?;
@@ -659,6 +686,118 @@ mod tests {
         assert!(status.success());
 
         DevBackend::with_persistence(&path).unwrap();
+        fs::remove_dir_all(&temp).unwrap();
+    }
+
+    /// Decode the persisted `SECRETS_BACKEND_STATE=` blob and return the URI keys
+    /// it actually holds on disk — so a test can assert on residual ciphertext,
+    /// not just on what the API returns.
+    fn persisted_keys(path: &std::path::Path) -> Vec<String> {
+        let contents = fs::read_to_string(path).unwrap();
+        let encoded = contents
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(&format!("{ENV_KEY}=")))
+            .expect("persisted state line");
+        let bytes = STANDARD_NO_PAD.decode(encoded.trim()).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        json["secrets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|secret| secret["key"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn purge_removes_every_version() {
+        let backend = DevBackend::new();
+        let scope = sample_scope();
+        let uri = sample_uri(&scope, "kv", "deployer-credential");
+
+        backend
+            .put(record(&uri, ContentType::Text, b"v1".to_vec()))
+            .unwrap();
+        backend
+            .put(record(&uri, ContentType::Text, b"v2".to_vec()))
+            .unwrap();
+        assert!(backend.exists(&uri).unwrap());
+
+        assert!(
+            backend.purge(&uri).unwrap(),
+            "purge reports the entry existed"
+        );
+        assert!(!backend.exists(&uri).unwrap());
+        assert!(backend.get(&uri, None).unwrap().is_none());
+        assert!(backend.get(&uri, Some(1)).unwrap().is_none());
+        assert!(backend.versions(&uri).unwrap().is_empty());
+
+        assert!(
+            !backend.purge(&uri).unwrap(),
+            "purging an absent uri is a no-op, not an error"
+        );
+    }
+
+    #[test]
+    fn purge_erases_ciphertext_from_disk_where_delete_leaves_it() {
+        let temp = std::env::temp_dir().join(format!(
+            "greentic-dev-purge-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&temp).unwrap();
+        let path = temp.join(".dev.secrets.env");
+
+        let scope = sample_scope();
+        let cred = sample_uri(&scope, "kv", "deployer-credential");
+        let runtime = sample_uri(&scope, "kv", "runtime-token");
+
+        // delete() only tombstones: the prior live version's encrypted record
+        // stays on disk, recoverable by anyone reading the raw persisted bytes.
+        {
+            let backend = DevBackend::with_persistence(&path).unwrap();
+            backend
+                .put(record(&cred, ContentType::Text, b"SA-KEY".to_vec()))
+                .unwrap();
+            backend.delete(&cred).unwrap();
+        }
+        assert!(
+            persisted_keys(&path).contains(&cred.to_string()),
+            "delete leaves the key (and its ciphertext) persisted — the H3 leak"
+        );
+
+        // purge() drops the whole key: no residual ciphertext survives, while a
+        // co-located runtime secret is left intact.
+        fs::remove_file(&path).unwrap();
+        {
+            let backend = DevBackend::with_persistence(&path).unwrap();
+            backend
+                .put(record(&cred, ContentType::Text, b"SA-KEY".to_vec()))
+                .unwrap();
+            backend
+                .put(record(&runtime, ContentType::Text, b"tok".to_vec()))
+                .unwrap();
+            assert!(backend.purge(&cred).unwrap());
+        }
+
+        let keys = persisted_keys(&path);
+        assert!(
+            !keys.contains(&cred.to_string()),
+            "purged credential must not persist"
+        );
+        assert!(
+            keys.contains(&runtime.to_string()),
+            "co-located runtime secret must survive the purge"
+        );
+
+        // A fresh reader (the workload's view of the staged file) cannot recover
+        // the credential, but still resolves the runtime secret.
+        let reopened = DevBackend::with_persistence(&path).unwrap();
+        assert!(reopened.get(&cred, None).unwrap().is_none());
+        assert!(reopened.get(&runtime, None).unwrap().is_some());
+
         fs::remove_dir_all(&temp).unwrap();
     }
 }
