@@ -103,6 +103,8 @@ impl TestAuth {
             .expect("ring verification");
 
         let mut validation = Validation::new(Algorithm::EdDSA);
+        validation.validate_exp = false;
+        validation.validate_nbf = false;
         validation.set_issuer(slice::from_ref(&self.issuer));
         validation.set_audience(slice::from_ref(&self.audience));
         // This helper also mints intentionally-expired tokens (expired_token).

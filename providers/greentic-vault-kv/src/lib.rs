@@ -21,6 +21,10 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
+mod identity;
+
+use identity::VaultAuthenticator;
+
 const DEFAULT_KV_MOUNT: &str = "secret";
 const DEFAULT_KV_PREFIX: &str = "greentic";
 const DEFAULT_TRANSIT_MOUNT: &str = "transit";
@@ -41,9 +45,99 @@ pub struct BackendComponents {
     pub key_provider: Box<dyn KeyProvider>,
 }
 
+/// How the Vault client authenticates. Public counterpart of the crate-internal
+/// auth method, so a caller can build a backend from explicit values instead of
+/// the process environment (the deployer seeds over a port-forward this way).
+pub enum VaultAuth {
+    /// A static token, sent verbatim on every request.
+    Token(String),
+    /// Kubernetes workload identity: exchange the pod's ServiceAccount JWT for a
+    /// Vault token via `auth/<mount>/login`.
+    Kubernetes {
+        role: String,
+        jwt_path: String,
+        mount: String,
+    },
+}
+
+/// Explicit, env-free Vault backend configuration — the public counterpart of
+/// the crate-internal `VaultProviderConfig`.
+///
+/// `insecure_skip_tls` is deliberately absent: it is a security policy, not a
+/// knob (`build_http_client` hard-bails on it), so a config-driven caller can
+/// never request a plaintext-tolerant client.
+pub struct VaultBackendConfig {
+    pub addr: String,
+    pub auth: VaultAuth,
+    pub namespace: Option<String>,
+    pub kv_mount: String,
+    pub kv_prefix: String,
+    pub transit_mount: String,
+    pub transit_key: String,
+    pub timeout: Duration,
+    pub ca_bundle: Option<Vec<u8>>,
+}
+
+impl VaultBackendConfig {
+    /// Read the exact environment the provider has always honored: `VAULT_ADDR`,
+    /// the identity vars (via `VaultAuth::from_env`), `VAULT_NAMESPACE`, the
+    /// `VAULT_KV_*` / `VAULT_TRANSIT_*` mount overrides, `VAULT_HTTP_TIMEOUT_SECS`,
+    /// and `VAULT_CA_BUNDLE`.
+    pub fn from_env() -> Result<Self> {
+        let addr = std::env::var("VAULT_ADDR").context("set VAULT_ADDR to the Vault server URL")?;
+        let namespace = std::env::var("VAULT_NAMESPACE").ok();
+        let auth = VaultAuth::from_env()?;
+        let kv_mount =
+            std::env::var("VAULT_KV_MOUNT").unwrap_or_else(|_| DEFAULT_KV_MOUNT.to_string());
+        let kv_prefix =
+            std::env::var("VAULT_KV_PREFIX").unwrap_or_else(|_| DEFAULT_KV_PREFIX.to_string());
+        let transit_mount = std::env::var("VAULT_TRANSIT_MOUNT")
+            .unwrap_or_else(|_| DEFAULT_TRANSIT_MOUNT.to_string());
+        let transit_key =
+            std::env::var("VAULT_TRANSIT_KEY").unwrap_or_else(|_| DEFAULT_TRANSIT_KEY.to_string());
+        let timeout = std::env::var("VAULT_HTTP_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .map(Duration::from_secs)
+            .unwrap_or_else(|| Duration::from_secs(15));
+        let ca_bundle = std::env::var("VAULT_CA_BUNDLE")
+            .ok()
+            .map(|path| fs::read(path).context("failed to read VAULT_CA_BUNDLE"))
+            .transpose()?;
+        // `insecure_skip_tls` is not a public knob, but a stray truthy env must
+        // still fail closed — never silently downgraded to a plaintext-tolerant
+        // client. The historical config carried the flag and rejected it at
+        // `build_http_client`; rejecting it here preserves that failure, earlier.
+        if std::env::var("VAULT_INSECURE_SKIP_TLS")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
+            .unwrap_or(false)
+        {
+            bail!("VAULT_INSECURE_SKIP_TLS is not permitted");
+        }
+        Ok(Self {
+            addr,
+            auth,
+            namespace,
+            kv_mount,
+            kv_prefix,
+            transit_mount,
+            transit_key,
+            timeout,
+            ca_bundle,
+        })
+    }
+}
+
 /// Construct the Vault backend and transit key provider from environment configuration.
 pub async fn build_backend() -> Result<BackendComponents> {
-    let config = Arc::new(VaultProviderConfig::from_env()?);
+    build_backend_with(VaultBackendConfig::from_env()?).await
+}
+
+/// Construct the Vault backend and transit key provider from an explicit
+/// [`VaultBackendConfig`], reading nothing from the process environment.
+pub async fn build_backend_with(config: VaultBackendConfig) -> Result<BackendComponents> {
+    let config = Arc::new(VaultProviderConfig::from_backend_config(config));
     let client = config.build_http_client()?;
 
     let backend = VaultSecretsBackend::new(config.clone(), client.clone());
@@ -436,7 +530,7 @@ impl KeyProvider for VaultTransitProvider {
 #[derive(Clone, Debug)]
 struct VaultProviderConfig {
     addr: String,
-    token: String,
+    auth: Arc<VaultAuthenticator>,
     namespace: Option<String>,
     kv_mount: String,
     kv_prefix: String,
@@ -448,45 +542,27 @@ struct VaultProviderConfig {
 }
 
 impl VaultProviderConfig {
-    fn from_env() -> Result<Self> {
-        let addr = std::env::var("VAULT_ADDR").context("set VAULT_ADDR to the Vault server URL")?;
-        let token =
-            std::env::var("VAULT_TOKEN").context("set VAULT_TOKEN for Vault authentication")?;
-        let namespace = std::env::var("VAULT_NAMESPACE").ok();
-        let kv_mount =
-            std::env::var("VAULT_KV_MOUNT").unwrap_or_else(|_| DEFAULT_KV_MOUNT.to_string());
-        let kv_prefix =
-            std::env::var("VAULT_KV_PREFIX").unwrap_or_else(|_| DEFAULT_KV_PREFIX.to_string());
-        let transit_mount = std::env::var("VAULT_TRANSIT_MOUNT")
-            .unwrap_or_else(|_| DEFAULT_TRANSIT_MOUNT.to_string());
-        let transit_key =
-            std::env::var("VAULT_TRANSIT_KEY").unwrap_or_else(|_| DEFAULT_TRANSIT_KEY.to_string());
-        let timeout = std::env::var("VAULT_HTTP_TIMEOUT_SECS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|value| *value > 0)
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| Duration::from_secs(15));
-        let ca_bundle = std::env::var("VAULT_CA_BUNDLE")
-            .ok()
-            .map(|path| fs::read(path).context("failed to read VAULT_CA_BUNDLE"))
-            .transpose()?;
-        let insecure_skip_tls = std::env::var("VAULT_INSECURE_SKIP_TLS")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
-            .unwrap_or(false);
-
-        Ok(Self {
-            addr,
-            token,
-            namespace,
-            kv_mount,
-            kv_prefix,
-            transit_mount,
-            transit_key,
-            timeout,
-            ca_bundle,
-            insecure_skip_tls,
-        })
+    /// Assemble the internal config from an explicit [`VaultBackendConfig`].
+    /// `insecure_skip_tls` is always `false`: a config-driven caller cannot
+    /// request a plaintext-tolerant client (see [`VaultBackendConfig`]).
+    fn from_backend_config(config: VaultBackendConfig) -> Self {
+        let auth = Arc::new(VaultAuthenticator::from_auth(
+            config.auth,
+            config.addr.clone(),
+            config.namespace.clone(),
+        ));
+        Self {
+            addr: config.addr,
+            auth,
+            namespace: config.namespace,
+            kv_mount: config.kv_mount,
+            kv_prefix: config.kv_prefix,
+            transit_mount: config.transit_mount,
+            transit_key: config.transit_key,
+            timeout: config.timeout,
+            ca_bundle: config.ca_bundle,
+            insecure_skip_tls: false,
+        }
     }
 
     fn build_http_client(&self) -> Result<Client> {
@@ -520,13 +596,37 @@ impl VaultProviderConfig {
         path: &str,
         body: Option<Value>,
     ) -> SecretsResult<Response> {
+        // Only a renewable (Kubernetes) token can benefit from a retry, so for a
+        // static token send directly and skip cloning the request body.
+        if !self.auth.is_renewable() {
+            return self.send_once(client, method, path, body).await;
+        }
+        let response = self
+            .send_once(client, method.clone(), path, body.clone())
+            .await?;
+        // The cached token may have expired; drop it and retry once.
+        if response.status() == StatusCode::FORBIDDEN {
+            self.auth.invalidate();
+            return self.send_once(client, method, path, body).await;
+        }
+        Ok(response)
+    }
+
+    async fn send_once(
+        &self,
+        client: &Client,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> SecretsResult<Response> {
         let url = format!(
             "{}/{}",
             self.addr.trim_end_matches('/'),
             path.trim_start_matches('/')
         );
+        let token = self.auth.token(client).await?;
         let mut builder = client.request(method, url);
-        builder = builder.header("X-Vault-Token", &self.token);
+        builder = builder.header("X-Vault-Token", token);
         if let Some(namespace) = &self.namespace {
             builder = builder.header("X-Vault-Namespace", namespace);
         }
@@ -737,6 +837,7 @@ fn decode_bytes(input: &str) -> SecretsResult<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use super::identity::kubernetes_login_request;
     use super::*;
     use once_cell::sync::Lazy;
     use std::sync::Mutex;
@@ -749,10 +850,21 @@ mod tests {
 
     impl EnvReset {
         fn new(pairs: &[(&'static str, &str)]) -> Self {
+            let owned: Vec<(&'static str, Option<&str>)> =
+                pairs.iter().map(|(k, v)| (*k, Some(*v))).collect();
+            Self::with(&owned)
+        }
+
+        /// Like [`new`], but a `None` value removes the variable for the
+        /// test's lifetime (restored on drop).
+        fn with(pairs: &[(&'static str, Option<&str>)]) -> Self {
             let mut vars = Vec::new();
             for (key, value) in pairs {
                 vars.push((*key, std::env::var(key).ok()));
-                unsafe { std::env::set_var(key, value) };
+                match value {
+                    Some(v) => unsafe { std::env::set_var(key, v) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
             }
             Self { vars }
         }
@@ -778,7 +890,9 @@ mod tests {
             ("VAULT_TOKEN", "test-token"),
         ]);
 
-        let config = Arc::new(VaultProviderConfig::from_env().expect("vault config"));
+        let config = Arc::new(VaultProviderConfig::from_backend_config(
+            VaultBackendConfig::from_env().expect("vault config"),
+        ));
         let client = config.build_http_client().expect("http client");
         let backend = VaultSecretsBackend::new(config, client);
 
@@ -787,5 +901,163 @@ mod tests {
 
         let result = backend.get(&uri, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn identity_uses_static_token_when_present() {
+        let _guard = ENV_GUARD.lock().expect("env guard");
+        let _env = EnvReset::with(&[("VAULT_TOKEN", Some("static-token"))]);
+        let auth = VaultAuthenticator::from_auth(
+            VaultAuth::from_env().expect("token identity"),
+            "http://vault:8200".to_string(),
+            None,
+        );
+        assert!(!auth.is_renewable());
+    }
+
+    #[test]
+    fn identity_selects_kubernetes_when_only_role_is_set() {
+        let _guard = ENV_GUARD.lock().expect("env guard");
+        let _env = EnvReset::with(&[
+            ("VAULT_TOKEN", None),
+            ("VAULT_K8S_ROLE", Some("greentic-worker")),
+        ]);
+        let auth = VaultAuthenticator::from_auth(
+            VaultAuth::from_env().expect("kubernetes identity"),
+            "http://vault:8200".to_string(),
+            None,
+        );
+        assert!(auth.is_renewable());
+    }
+
+    #[test]
+    fn identity_requires_a_configured_method() {
+        let _guard = ENV_GUARD.lock().expect("env guard");
+        let _env = EnvReset::with(&[("VAULT_TOKEN", None), ("VAULT_K8S_ROLE", None)]);
+        assert!(VaultAuth::from_env().is_err());
+    }
+
+    #[test]
+    fn backend_config_from_env_reads_the_expected_fields() {
+        let _guard = ENV_GUARD.lock().expect("env guard");
+        let _env = EnvReset::with(&[
+            ("VAULT_ADDR", Some("http://vault:8200")),
+            ("VAULT_TOKEN", Some("root")),
+            ("VAULT_KV_MOUNT", Some("kv2")),
+            ("VAULT_KV_PREFIX", Some("gt")),
+            ("VAULT_TRANSIT_MOUNT", None),
+            ("VAULT_TRANSIT_KEY", None),
+            ("VAULT_NAMESPACE", None),
+            ("VAULT_CA_BUNDLE", None),
+            ("VAULT_HTTP_TIMEOUT_SECS", None),
+            ("VAULT_INSECURE_SKIP_TLS", None),
+        ]);
+        let cfg = VaultBackendConfig::from_env().expect("config");
+        assert_eq!(cfg.addr, "http://vault:8200");
+        assert!(matches!(cfg.auth, VaultAuth::Token(ref t) if t == "root"));
+        assert_eq!(cfg.kv_mount, "kv2");
+        assert_eq!(cfg.kv_prefix, "gt");
+        assert_eq!(cfg.transit_mount, DEFAULT_TRANSIT_MOUNT);
+        assert_eq!(cfg.transit_key, DEFAULT_TRANSIT_KEY);
+        assert_eq!(cfg.timeout, Duration::from_secs(15));
+        assert!(cfg.namespace.is_none());
+        assert!(cfg.ca_bundle.is_none());
+    }
+
+    #[test]
+    fn backend_config_from_env_rejects_insecure_skip_tls() {
+        let _guard = ENV_GUARD.lock().expect("env guard");
+        let _env = EnvReset::with(&[
+            ("VAULT_ADDR", Some("http://vault:8200")),
+            ("VAULT_TOKEN", Some("root")),
+            ("VAULT_INSECURE_SKIP_TLS", Some("true")),
+        ]);
+        assert!(
+            VaultBackendConfig::from_env()
+                .is_err_and(|e| e.to_string().contains("VAULT_INSECURE_SKIP_TLS"))
+        );
+    }
+
+    #[test]
+    fn from_backend_config_maps_public_to_internal_and_never_skips_tls() {
+        let internal = VaultProviderConfig::from_backend_config(VaultBackendConfig {
+            addr: "http://127.0.0.1:8200".to_string(),
+            auth: VaultAuth::Token("root".to_string()),
+            namespace: Some("ns".to_string()),
+            kv_mount: DEFAULT_KV_MOUNT.to_string(),
+            kv_prefix: DEFAULT_KV_PREFIX.to_string(),
+            transit_mount: DEFAULT_TRANSIT_MOUNT.to_string(),
+            transit_key: DEFAULT_TRANSIT_KEY.to_string(),
+            timeout: Duration::from_secs(15),
+            ca_bundle: None,
+        });
+        assert_eq!(internal.addr, "http://127.0.0.1:8200");
+        assert_eq!(internal.namespace.as_deref(), Some("ns"));
+        assert!(!internal.insecure_skip_tls);
+        assert!(!internal.auth.is_renewable());
+        // A config-driven client never requests plaintext tolerance, so it builds.
+        assert!(internal.build_http_client().is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_backend_with_constructs_from_explicit_config_without_env() {
+        // No VAULT_* env is set; the explicit config alone drives construction.
+        let cfg = VaultBackendConfig {
+            addr: "http://127.0.0.1:9".to_string(),
+            auth: VaultAuth::Token("test-token".to_string()),
+            namespace: None,
+            kv_mount: DEFAULT_KV_MOUNT.to_string(),
+            kv_prefix: DEFAULT_KV_PREFIX.to_string(),
+            transit_mount: DEFAULT_TRANSIT_MOUNT.to_string(),
+            transit_key: DEFAULT_TRANSIT_KEY.to_string(),
+            timeout: Duration::from_secs(15),
+            ca_bundle: None,
+        };
+        let components = build_backend_with(cfg).await.expect("backend built");
+        let scope = Scope::new(String::from("env"), String::from("tenant"), None).expect("scope");
+        let uri = SecretUri::new(scope, "category", "name").expect("uri");
+        // The unreachable server yields an error, not a panic.
+        assert!(components.backend.get(&uri, None).is_err());
+    }
+
+    #[test]
+    fn kubernetes_login_request_builds_canonical_url_and_body() {
+        let (url, body) = kubernetes_login_request(
+            "https://vault.example.com/",
+            "/kubernetes/",
+            "greentic-worker",
+            "jwt-value",
+        );
+        assert_eq!(url, "https://vault.example.com/v1/auth/kubernetes/login");
+        assert_eq!(body["role"], "greentic-worker");
+        assert_eq!(body["jwt"], "jwt-value");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn kubernetes_login_surfaces_a_missing_jwt_file() {
+        // Capture the env-derived config under the guard, then drop the guard
+        // before awaiting — the authenticator already holds the jwt path.
+        let auth = {
+            let _guard = ENV_GUARD.lock().expect("env guard");
+            let _env = EnvReset::with(&[
+                ("VAULT_TOKEN", None),
+                ("VAULT_K8S_ROLE", Some("greentic-worker")),
+                ("VAULT_K8S_JWT_PATH", Some("/nonexistent/greentic/sa-token")),
+            ]);
+            VaultAuthenticator::from_auth(
+                VaultAuth::from_env().expect("kubernetes identity"),
+                "http://127.0.0.1:9".to_string(),
+                None,
+            )
+        };
+        let client = Client::builder().build().expect("client");
+        let err = auth
+            .token(&client)
+            .await
+            .expect_err("missing jwt must fail");
+        assert!(
+            err.to_string().contains("service-account token"),
+            "unexpected error: {err}"
+        );
     }
 }
