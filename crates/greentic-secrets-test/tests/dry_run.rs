@@ -308,6 +308,7 @@ fn build_manifest(pack_id: &str) -> anyhow::Result<PackManifest> {
         flow,
         tags: Vec::new(),
         entrypoints: vec!["setup".to_string(), "requirements".to_string()],
+        subscribes_to: Vec::new(),
     };
 
     Ok(PackManifest {
