@@ -10,6 +10,16 @@ repository = "https://github.com/greenticai/greentic-secrets"
 name = "greentic-secrets"
 path = "src/main.rs"
 
+[package.metadata.binstall]
+pkg-url = "{repo}/releases/download/v{version}/{name}-v{version}-{target}.{archive-format}"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
